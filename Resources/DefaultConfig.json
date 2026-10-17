@@ -1,0 +1,31 @@
+{
+  "game": {
+    "physics": {
+      "minSpeed": 20, "maxSpeed": 75, "drag": 0.0008, "gravity": 9.8,
+      "stepsPerSecond": 120, "maxFlightSeconds": 18,
+      "boundsMarginX": 800, "boundsBottom": -20,
+      "archerScale": 1.8, "launchOffsetX": 0.35, "launchOffsetY": 1.35,
+      "nearMissDistance": 3
+    },
+    "damage": { "head": 50, "body": 25, "legs": 15, "startHealth": 100 },
+    "rules": { "roundsToWin": 3, "roundsToWinEasyAI": 2, "maxShotsPerPlayerPerRound": 20, "shotTimeLimitSeconds": 20 },
+    "aim": { "minAngleTenths": -100, "maxAngleTenths": 850, "maxDragFractionOfScreenHeight": 0.4, "deadZonePoints": 12, "aimGuidePercent": 15 }
+  },
+  "camera": {
+    "aimViewWidth": 20, "flightMaxViewWidth": 120, "impactViewWidth": 28,
+    "followSmoothing": 0.45, "impactHoldSeconds": 1.4, "panSeconds": 1.6, "openingPanSeconds": 2.8
+  },
+  "flags": {
+    "dailyShotEnabled": true, "quickMatchEnabled": true, "asyncMatchesEnabled": true,
+    "leaguesEnabled": true, "braceEnabled": true, "lineBoilEnabled": true,
+    "rankedEnabled": false, "appClipInvitesEnabled": false,
+    "liveAimPreviewEnabled": false, "allowAsymmetricMaps": false
+  },
+  "xp": { "matchCompleted": 20, "matchWon": 30, "headshot": 5 },
+  "monetization": {
+    "enabled": false, "shopEnabled": false, "iapEnabled": false, "seasonPassEnabled": false,
+    "rewardedAdsEnabled": false, "premiumAccentEnabled": false,
+    "paidNameChangeEnabled": false, "streakProtectionEnabled": false
+  },
+  "minimumAppVersion": "1.0.0"
+}

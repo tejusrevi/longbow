@@ -1,0 +1,268 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "" : {
+
+    },
+    " " : {
+
+    },
+    "%@ shoots first" : {
+
+    },
+    "%@, locked, %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@, locked, %2$@"
+          }
+        }
+      }
+    },
+    "%@, with %lld arrows landed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@, with %2$lld arrows landed"
+          }
+        }
+      }
+    },
+    "%@%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@%2$@"
+          }
+        }
+      }
+    },
+    "%lld in a row" : {
+
+    },
+    "%lld m" : {
+
+    },
+    "%lld of %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld"
+          }
+        }
+      }
+    },
+    "%lld percent" : {
+
+    },
+    "%lld rounds won" : {
+
+    },
+    "%lld seconds left" : {
+
+    },
+    "%lld wins in a row." : {
+
+    },
+    "%lld xp to go" : {
+
+    },
+    "+%lld xp" : {
+
+    },
+    "Back" : {
+
+    },
+    "Back to the title. Counts as a loss." : {
+
+    },
+    "Battlefield. Drag back anywhere and let go to shoot." : {
+
+    },
+    "Discard" : {
+
+    },
+    "Discard your changes?" : {
+
+    },
+    "DONE" : {
+
+    },
+    "Edit your face" : {
+
+    },
+    "Friend duels and quick match arrive in the next build." : {
+
+    },
+    "HATS" : {
+
+    },
+    "Health" : {
+
+    },
+    "Hold to slow time" : {
+
+    },
+    "Home" : {
+
+    },
+    "Keep editing" : {
+
+    },
+    "Level %lld, gained %lld XP" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Level %1$lld, gained %2$lld XP"
+          }
+        }
+      }
+    },
+    "level up!" : {
+
+    },
+    "LVL %lld" : {
+
+    },
+    "MAKE YOUR ARCHER" : {
+
+    },
+    "MULTI PLAYER" : {
+
+    },
+    "NEW HAT!" : {
+
+    },
+    "new record — %@" : {
+
+    },
+    "No wind" : {
+
+    },
+    "OK" : {
+
+    },
+    "one phone, take turns" : {
+
+    },
+    "ONLINE" : {
+
+    },
+    "PASS & PLAY" : {
+
+    },
+    "Pause" : {
+
+    },
+    "PAUSED" : {
+
+    },
+    "Profile, level %lld" : {
+
+    },
+    "QUIT" : {
+
+    },
+    "QUIT TO TITLE" : {
+
+    },
+    "QUIT?" : {
+
+    },
+    "REMATCH" : {
+
+    },
+    "RESUME" : {
+
+    },
+    "Score %lld to %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Score %1$lld to %2$lld"
+          }
+        }
+      }
+    },
+    "shape" : {
+
+    },
+    "Share" : {
+
+    },
+    "SHUFFLE" : {
+
+    },
+    "SINGLE PLAYER" : {
+
+    },
+    "skin" : {
+
+    },
+    "Skin tone: %@" : {
+
+    },
+    "Skip" : {
+
+    },
+    "soon" : {
+
+    },
+    "SOUND OFF" : {
+
+    },
+    "SOUND ON" : {
+
+    },
+    "STAY" : {
+
+    },
+    "This match ends here." : {
+
+    },
+    "Toss" : {
+
+    },
+    "UNDO" : {
+
+    },
+    "VS GUS" : {
+
+    },
+    "WEAR IT" : {
+
+    },
+    "WEARING IT" : {
+
+    },
+    "WIND" : {
+
+    },
+    "Wind %.1f blowing %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Wind %1$.1f blowing %2$@"
+          }
+        }
+      }
+    },
+    "YOU" : {
+
+    },
+    "you shoot first" : {
+
+    },
+    "Your archer" : {
+
+    }
+  },
+  "version" : "1.0"
+}
