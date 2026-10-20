@@ -24,5 +24,12 @@ function rpcSimulateShots(ctx: any, logger: any, nk: any, payload: string): stri
 function InitModule(ctx: any, logger: any, nk: any, initializer: any): void {
   initializer.registerRpc("ping", rpcPing);
   initializer.registerRpc("simulate_shots", rpcSimulateShots);
-  logger.info("Longbow runtime loaded (physics v4)");
+  initializer.registerRpc("create_duel", rpcCreateDuel);
+  initializer.registerRpc("join_duel", rpcJoinDuel);
+  initializer.registerRpc("duel_history", rpcDuelHistory);
+  initializer.registerMatch(DUEL_MODULE, {
+    matchInit: duelInit, matchJoinAttempt: duelJoinAttempt, matchJoin: duelJoin, matchLeave: duelLeave,
+    matchLoop: duelLoop, matchTerminate: duelTerminate, matchSignal: duelSignal,
+  });
+  logger.info("Longbow runtime loaded (physics v4, duels)");
 }

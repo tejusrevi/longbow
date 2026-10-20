@@ -333,6 +333,590 @@ function simulateShot(angleTenthsRaw, powerPermilleRaw, shooter, c) {
     }
     return { impact: "timeout", x: px, y: py, vx: vx, vy: vy, steps: step };
 }
+// Match rules: a line-by-line port of LongbowCore's MatchEngine (spec A6.4,
+// A6.5), plus ShotSearch.isHittable and RoundConditions.generatePlayable that
+// it relies on. Shared/golden_matches.json proves it plays out exactly like
+// the app, turn by turn.
+var RULES = { roundsToWin: 3, maxShotsPerPlayerPerRound: 20, startHealth: 100, shotTimeLimitSeconds: 20 };
+var DAMAGE = { head: 50, body: 25, legs: 15 };
+var NEAR_MISS_DISTANCE = 3;
+var CHALLENGES = {
+    easy: { windScale: 0.5, knockMin: 15, knockMax: 25, maxKnockback: 6 },
+    medium: { windScale: 1, knockMin: 30, knockMax: 45, maxKnockback: 10 },
+    hard: { windScale: 1.5, knockMin: 50, knockMax: 70, maxKnockback: 14 },
+};
+/// Swift's `.rounded()`: halves round away from zero (Math.round does not, for negatives).
+function roundSwift(x) { return x < 0 ? -Math.round(-x) : Math.round(x); }
+function hexU64(v) { return "0x" + ("00000000" + v.hi.toString(16)).slice(-8).toUpperCase() + ("00000000" + v.lo.toString(16)).slice(-8).toUpperCase(); }
+// --- ShotSearch.isHittable --------------------------------------------------
+function bodyCenter(feet, s) { return { x: feet.x, y: feet.y + 1.2 * s }; }
+/// True when some shot from `shooter` can hit the other archer (angle step 3°,
+/// binary search on power). Order of angles doesn't change the yes/no answer.
+function isHittable(c, shooter) {
+    var target = 1 - shooter;
+    var dir = facing(shooter);
+    var aim = bodyCenter(archerPosition(c, target), PHYSICS.archerScale);
+    for (var a = AIM.minAngleTenths; a <= AIM.maxAngleTenths; a += 30) {
+        var lo = 0, hi = 1000;
+        var far = simulateShot(a, hi, shooter, c);
+        if (far.impact === "archer" && far.index === target)
+            return true;
+        if ((far.x - aim.x) * dir < 0)
+            continue;
+        for (var k = 0; k < 11; k++) {
+            var mid = Math.floor((lo + hi) / 2);
+            var e = simulateShot(a, mid, shooter, c);
+            if (e.impact === "archer" && e.index === target)
+                return true;
+            if ((e.x - aim.x) * dir < 0)
+                lo = mid;
+            else
+                hi = mid;
+            if (hi - lo <= 1)
+                break;
+        }
+    }
+    return false;
+}
+function generatePlayable(seed, arena) {
+    var last = generateConditions(hexU64(seed), arena);
+    if (isHittable(last, 0))
+        return last;
+    for (var attempt = 1; attempt <= 12; attempt++) {
+        last = generateConditions(hexU64(hash64(seed, [u64(0, 0xF1), u64FromInt(attempt)])), arena);
+        if (isHittable(last, 0))
+            return last;
+    }
+    last.windRelative = 0;
+    last.obstacles = [];
+    return last;
+}
+function roundSeed(matchSeed, round, suddenDeath) {
+    return hash64(matchSeed, [u64FromInt(round), u64FromInt(suddenDeath)]);
+}
+function tossWinner(seed) { return hash64(seed, [u64(0, 0x7055)]).lo & 1; }
+// --- Miss distance ----------------------------------------------------------
+function shapeDistance(s, p) {
+    if (s.kind === "circle") {
+        var dx_2 = p.x - s.c.x, dy_2 = p.y - s.c.y;
+        return Math.max(0, Math.sqrt(dx_2 * dx_2 + dy_2 * dy_2) - s.r);
+    }
+    var dx = Math.max(Math.max(s.min.x - p.x, 0), p.x - s.max.x);
+    var dy = Math.max(Math.max(s.min.y - p.y, 0), p.y - s.max.y);
+    return Math.sqrt(dx * dx + dy * dy);
+}
+function hitboxDistance(p, feet) {
+    var shapes = hitboxes(feet, PHYSICS.archerScale);
+    var best = Infinity;
+    for (var i = 0; i < shapes.length; i++)
+        best = Math.min(best, shapeDistance(shapes[i][1], p));
+    return best;
+}
+function f64Hex(x) {
+    // Bit pattern of a double without typed arrays: exact for all finite values.
+    if (x === 0)
+        return 1 / x < 0 ? "0x8000000000000000" : "0x0000000000000000";
+    var sign = x < 0 ? 1 : 0;
+    var v = Math.abs(x);
+    var exp = Math.floor(Math.log(v) / Math.LN2);
+    if (Math.pow(2, exp) > v)
+        exp--;
+    if (Math.pow(2, exp + 1) <= v)
+        exp++;
+    var biased = exp + 1023, frac;
+    if (biased <= 0) {
+        frac = v / Math.pow(2, -1074);
+        biased = 0;
+    }
+    else {
+        frac = (v / Math.pow(2, exp) - 1) * 4503599627370496;
+    }
+    var hi = (sign << 31 | biased << 20 | Math.floor(frac / 4294967296)) >>> 0;
+    var lo = frac % 4294967296;
+    return "0x" + ("00000000" + hi.toString(16)).slice(-8).toUpperCase() + ("00000000" + lo.toString(16)).slice(-8).toUpperCase();
+}
+var MatchEngine = /** @class */ (function () {
+    function MatchEngine(seedHex, arena, roundsToWin, firstShooter, challenge) {
+        var seed = u64FromHex(seedHex);
+        var profile = arenaProfile(arena);
+        this.state = {
+            seed: seed, arena: arena, roundsToWin: roundsToWin, challenge: challenge,
+            phase: { kind: "awaitingShot" }, round: 1, roundsWon: [0, 0], roundFirstShooter: firstShooter,
+            health: [RULES.startHealth, RULES.startHealth], shotsThisRound: [0, 0], currentShooter: firstShooter,
+            turn: 1, lastBreath: false, pair: 0, suddenDeath: 0, suddenDeathShots: [null, null],
+            conditions: generatePlayable(roundSeed(seed, 1, 0), profile), windWorld: 0, hitsLanded: [0, 0], headshots: [0, 0],
+        };
+        var sign = this.windSign();
+        this.state.windWorld = this.fittedWind(this.scaledWind(sign * Math.abs(this.state.conditions.windRelative)));
+        this.syncWind();
+    }
+    MatchEngine.prototype.ch = function () { return CHALLENGES[this.state.challenge] || CHALLENGES.medium; };
+    MatchEngine.prototype.windSign = function () { return (hash64(this.state.seed, [u64(0, 0x5141D)]).lo & 1) === 0 ? 1 : -1; };
+    MatchEngine.prototype.syncWind = function () { this.state.conditions.windRelative = this.state.windWorld * facing(this.state.currentShooter); };
+    MatchEngine.prototype.windAllowsHits = function (world) {
+        var c = this.copyConditions();
+        for (var shooter = 0; shooter < 2; shooter++) {
+            c.windRelative = world * facing(shooter);
+            if (!isHittable(c, shooter))
+                return false;
+        }
+        return true;
+    };
+    MatchEngine.prototype.copyConditions = function () {
+        var c = this.state.conditions;
+        return { seedHex: c.seedHex, arena: c.arena, distance: c.distance, windRelative: c.windRelative, gravity: c.gravity,
+            terrain: c.terrain, obstacles: c.obstacles, archerOffsets: [c.archerOffsets[0], c.archerOffsets[1]] };
+    };
+    MatchEngine.prototype.fittedWind = function (world) {
+        var w = world;
+        while (w !== 0 && !this.windAllowsHits(w))
+            w = w > 0 ? Math.max(0, w - 0.5) : Math.min(0, w + 0.5);
+        return w;
+    };
+    MatchEngine.prototype.scaledWind = function (w) { return roundSwift(w * this.ch().windScale * 2) / 2; };
+    MatchEngine.prototype.knockBack = function (victim) {
+        var ch = this.ch();
+        var rng = new SplitMix64(hash64(this.state.seed, [u64(0, 0xB0B0), u64FromInt(this.state.turn)]));
+        var offsets = this.state.conditions.archerOffsets;
+        var old = offsets[victim];
+        var push = rng.nextInt(ch.knockMin, ch.knockMax) / 10;
+        push = Math.min(push, ch.maxKnockback - old);
+        while (push >= 0.5) {
+            offsets[victim] = old + push;
+            if (this.windAllowsHits(this.state.windWorld) || this.windAllowsHits(0))
+                break;
+            push -= 0.5;
+        }
+        if (push < 0.5) {
+            offsets[victim] = old;
+            return null;
+        }
+        this.state.windWorld = this.fittedWind(this.state.windWorld);
+        return old + push;
+    };
+    MatchEngine.prototype.shiftWindAfterStrike = function () {
+        var arena = arenaProfile(this.state.arena);
+        var rng = new SplitMix64(hash64(this.state.seed, [u64(0, 0x5711CE), u64FromInt(this.state.turn)]));
+        var w = this.state.windWorld;
+        var sign = w < 0 ? -1 : (w > 0 ? 1 : this.windSign());
+        var current = Math.abs(w);
+        var lo = Math.trunc(roundSwift(arena.minWind * this.ch().windScale * 2));
+        var hi = Math.trunc(roundSwift(arena.maxWind * this.ch().windScale * 2));
+        var steps = [];
+        for (var s = lo; s <= Math.max(lo, hi); s++) {
+            if (s * 0.5 !== current)
+                steps.push(s * 0.5);
+        }
+        if (steps.length === 0)
+            return null;
+        var next = this.fittedWind(sign * steps[rng.nextInt(0, steps.length - 1)]);
+        if (next === this.state.windWorld)
+            return null;
+        this.state.windWorld = next;
+        return next;
+    };
+    MatchEngine.prototype.submit = function (angleTenthsRaw, powerPermilleRaw) {
+        if (this.state.phase.kind !== "awaitingShot")
+            throw new Error("not awaiting a shot");
+        var inp = clampInput(angleTenthsRaw, powerPermilleRaw);
+        var st = this.state;
+        var shooter = st.currentShooter;
+        var target = 1 - shooter;
+        var outcome = simulateShot(inp[0], inp[1], shooter, st.conditions);
+        var hitArcher = outcome.impact === "archer" ? outcome.index : null;
+        var damage = 0;
+        var damaged = null;
+        if (hitArcher !== null) {
+            damage = Math.floor(DAMAGE[outcome.part] * 1);
+            damaged = hitArcher;
+            if (st.suddenDeath === 0)
+                st.health[hitArcher] = Math.max(0, st.health[hitArcher] - damage);
+            if (hitArcher === target) {
+                st.hitsLanded[shooter] += 1;
+                if (outcome.part === "head")
+                    st.headshots[shooter] += 1;
+            }
+        }
+        var missDistance = hitArcher === target ? null : hitboxDistance({ x: outcome.x, y: outcome.y }, archerPosition(st.conditions, target));
+        var nearMiss = missDistance !== null && missDistance <= NEAR_MISS_DISTANCE ? missDistance : null;
+        var turn = st.turn;
+        st.turn += 1;
+        st.shotsThisRound[shooter] += 1;
+        var events = st.suddenDeath > 0
+            ? this.resolveSuddenDeath(shooter, missDistance !== null ? missDistance : 0, hitArcher === target ? damage : 0)
+            : this.resolveNormal(shooter);
+        var hasNextTurn = events.some(function (e) { return e.indexOf("nextTurn:") === 0; });
+        if (hitArcher !== null && st.suddenDeath === 0 && st.phase.kind === "awaitingShot" && hasNextTurn) {
+            var w = this.shiftWindAfterStrike();
+            if (w !== null)
+                events.unshift("windChanged:" + f64Hex(w));
+            var off = this.knockBack(hitArcher);
+            if (off !== null)
+                events.unshift("knockedBack:" + hitArcher + ":" + f64Hex(off));
+        }
+        this.syncWind();
+        var last = events[events.length - 1];
+        if (last && last.indexOf("roundOver:") === 0) {
+            var winner = parseInt(last.split(":")[1], 10);
+            st.roundsWon[winner] += 1;
+            if (st.roundsWon[winner] >= st.roundsToWin) {
+                st.phase = { kind: "matchOver", winner: winner };
+                events.push("matchOver:" + winner);
+            }
+            else {
+                st.phase = { kind: "roundOver", winner: winner };
+            }
+        }
+        return { turn: turn, round: st.round, shooter: shooter, angleTenths: inp[0], powerPermille: inp[1], outcome: outcome,
+            damagedArcher: damaged, damage: damage, health: [st.health[0], st.health[1]], missDistance: missDistance,
+            nearMiss: nearMiss, events: events };
+    };
+    MatchEngine.prototype.resolveNormal = function (shooter) {
+        var st = this.state;
+        var first = st.roundFirstShooter, second = 1 - first;
+        if (shooter === first) {
+            st.currentShooter = second;
+            st.lastBreath = st.health[second] === 0;
+            return ["nextTurn:" + second + ":" + st.lastBreath];
+        }
+        st.lastBreath = false;
+        var firstDown = st.health[first] === 0, secondDown = st.health[second] === 0;
+        if (firstDown && secondDown)
+            return this.startSuddenDeath();
+        if (firstDown)
+            return ["roundOver:" + second + ":knockout"];
+        if (secondDown)
+            return ["roundOver:" + first + ":knockout"];
+        var limit = RULES.maxShotsPerPlayerPerRound;
+        if (st.shotsThisRound[first] >= limit && st.shotsThisRound[second] >= limit) {
+            if (st.health[first] === st.health[second])
+                return this.startSuddenDeath();
+            var winner = st.health[first] > st.health[second] ? first : second;
+            return ["roundOver:" + winner + ":turnLimit"];
+        }
+        st.currentShooter = first;
+        st.pair += 1;
+        return ["nextTurn:" + first + ":false"];
+    };
+    MatchEngine.prototype.startSuddenDeath = function () {
+        var st = this.state;
+        st.suddenDeath += 1;
+        st.suddenDeathShots = [null, null];
+        st.lastBreath = false;
+        st.conditions = generatePlayable(roundSeed(st.seed, st.round, st.suddenDeath), arenaProfile(st.arena));
+        st.currentShooter = st.roundFirstShooter;
+        st.windWorld = this.fittedWind(st.windWorld);
+        this.syncWind();
+        return ["suddenDeath:" + st.suddenDeath];
+    };
+    MatchEngine.prototype.resolveSuddenDeath = function (shooter, missDistance, damage) {
+        var st = this.state;
+        st.suddenDeathShots[shooter] = { missDistance: damage > 0 ? 0 : missDistance, damage: damage };
+        var a = st.suddenDeathShots[0], b = st.suddenDeathShots[1];
+        if (!a || !b) {
+            st.currentShooter = 1 - shooter;
+            return ["nextTurn:" + (1 - shooter) + ":false"];
+        }
+        var winner = null;
+        if (a.damage > 0 || b.damage > 0) {
+            if (a.damage !== b.damage)
+                winner = a.damage > b.damage ? 0 : 1;
+        }
+        else if (a.missDistance !== b.missDistance) {
+            winner = a.missDistance < b.missDistance ? 0 : 1;
+        }
+        if (winner !== null)
+            return ["roundOver:" + winner + ":suddenDeath"];
+        return this.startSuddenDeath();
+    };
+    MatchEngine.prototype.startNextRound = function () {
+        var st = this.state;
+        if (st.phase.kind !== "roundOver")
+            return;
+        st.round += 1;
+        st.roundFirstShooter = 1 - st.roundFirstShooter;
+        st.currentShooter = st.roundFirstShooter;
+        st.health = [RULES.startHealth, RULES.startHealth];
+        st.shotsThisRound = [0, 0];
+        st.lastBreath = false;
+        st.suddenDeath = 0;
+        st.suddenDeathShots = [null, null];
+        st.pair = 0;
+        st.conditions = generatePlayable(roundSeed(st.seed, st.round, 0), arenaProfile(st.arena));
+        st.windWorld = this.fittedWind(st.windWorld);
+        this.syncWind();
+        st.phase = { kind: "awaitingShot" };
+    };
+    MatchEngine.prototype.forfeit = function (player) { this.state.phase = { kind: "matchOver", winner: 1 - player }; };
+    /// Nakama hands match state back as plain data each tick, so the rules are
+    /// re-attached to the saved state rather than kept as a live object.
+    MatchEngine.wrap = function (state) {
+        var e = Object.create(MatchEngine.prototype);
+        e.state = state;
+        return e;
+    };
+    return MatchEngine;
+}());
+// Friend duels (spec A7.2, A8): a 4-character code, two seats, the server
+// holds the one true MatchEngine. Clients send only their inputs; the server
+// simulates, then sends every result to both players.
+var DUEL_MODULE = "duel";
+var CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no O/0, I/1
+var CODE_COLLECTION = "duel_codes";
+var SYSTEM_USER = "00000000-0000-0000-0000-000000000000";
+var OP = {
+    // client → server
+    SHOT: 1, READY: 2, LEAVE: 3,
+    // server → client
+    START: 10, RESULT: 11, END: 12, OPPONENT_AWAY: 13, OPPONENT_BACK: 14, REJECT: 15,
+};
+var TICK_RATE = 5;
+var ANIMATION_ALLOWANCE_S = 16; // longest flight + reactions before the next shooter can aim
+var ROUND_BREAK_S = 10; // round banner and the opening pan of the next round
+var AWAY_GRACE_S = 30;
+function randomHex64() {
+    var s = "0x";
+    for (var i = 0; i < 4; i++)
+        s += ("0000" + Math.floor(Math.random() * 65536).toString(16)).slice(-4).toUpperCase();
+    return s;
+}
+function newCode() {
+    var c = "";
+    for (var i = 0; i < 4; i++)
+        c += CODE_ALPHABET.charAt(Math.floor(Math.random() * CODE_ALPHABET.length));
+    return c;
+}
+function seatOf(s, userId) {
+    for (var i = 0; i < 2; i++) {
+        var st = s.seats[i];
+        if (st && st.userId === userId)
+            return i;
+    }
+    return -1;
+}
+// --- RPCs -------------------------------------------------------------------
+function rpcCreateDuel(ctx, logger, nk, payload) {
+    var req = payload ? JSON.parse(payload) : {};
+    var challenge = CHALLENGES[req.challenge] ? req.challenge : "medium";
+    for (var attempt = 0; attempt < 20; attempt++) {
+        var code = newCode();
+        var existing = nk.storageRead([{ collection: CODE_COLLECTION, key: code, userId: SYSTEM_USER }]);
+        if (existing.length > 0) {
+            // Codes are reused once their match is gone.
+            var live = nk.matchGet(existing[0].value.matchId);
+            if (live)
+                continue;
+        }
+        var matchId = nk.matchCreate(DUEL_MODULE, { code: code, challenge: challenge, createdBy: ctx.userId });
+        nk.storageWrite([{ collection: CODE_COLLECTION, key: code, userId: SYSTEM_USER, value: { matchId: matchId },
+                permissionRead: 0, permissionWrite: 0 }]);
+        return JSON.stringify({ code: code, matchId: matchId });
+    }
+    throw new Error("could not allocate a duel code");
+}
+function rpcJoinDuel(ctx, logger, nk, payload) {
+    var req = JSON.parse(payload || "{}");
+    var code = String(req.code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    var found = nk.storageRead([{ collection: CODE_COLLECTION, key: code, userId: SYSTEM_USER }]);
+    if (found.length === 0)
+        return JSON.stringify({ error: "no_such_code" });
+    var match = nk.matchGet(found[0].value.matchId);
+    if (!match)
+        return JSON.stringify({ error: "no_such_code" });
+    var label = JSON.parse(match.label || "{}");
+    if (!label.open && label.players && label.players.indexOf(ctx.userId) < 0)
+        return JSON.stringify({ error: "full" });
+    return JSON.stringify({ matchId: found[0].value.matchId });
+}
+// --- Match handler ----------------------------------------------------------
+function label(s) {
+    var players = [];
+    for (var i = 0; i < 2; i++) {
+        var st = s.seats[i];
+        if (st)
+            players.push(st.userId);
+    }
+    return JSON.stringify({ code: s.code, open: players.length < 2 && s.engine === null, players: players });
+}
+function duelInit(ctx, logger, nk, params) {
+    var s = { code: params.code, challenge: params.challenge || "medium", seats: [null, null], engine: null,
+        seedHex: "", deadlineTick: 0, tick: 0, endedTick: -1, createdBy: params.createdBy || "" };
+    return { state: s, tickRate: TICK_RATE, label: label(s) };
+}
+function duelJoinAttempt(ctx, logger, nk, dispatcher, tick, s, presence, metadata) {
+    if (seatOf(s, presence.userId) >= 0)
+        return { state: s, accept: true };
+    if (s.engine !== null || (s.seats[0] && s.seats[1]))
+        return { state: s, accept: false, rejectMessage: "full" };
+    // The creator always takes the left seat.
+    var seat = s.seats[0] ? 1 : 0;
+    if (presence.userId !== s.createdBy && !s.seats[1] && seat === 0)
+        seat = 1;
+    s.seats[seat] = { userId: presence.userId, sessionId: presence.sessionId, name: String((metadata && metadata.name) || "PLAYER").slice(0, 16),
+        avatar: metadata && metadata.avatar ? JSON.parse(metadata.avatar) : null, hat: (metadata && metadata.hat) || "none",
+        present: false, awaySince: 0 };
+    return { state: s, accept: true };
+}
+function broadcast(dispatcher, op, body, to) {
+    dispatcher.broadcastMessage(op, JSON.stringify(body), to || null, null, true);
+}
+function startMessage(s) {
+    var e = MatchEngine.wrap(s.engine);
+    return {
+        seed: s.seedHex, arena: e.state.arena, roundsToWin: e.state.roundsToWin, challenge: s.challenge,
+        firstShooter: tossWinner(u64FromHex(s.seedHex)), turn: e.state.turn,
+        seats: s.seats.map(function (st) { return st ? { userId: st.userId, name: st.name, avatar: st.avatar, hat: st.hat } : null; }),
+        history: s.history || [],
+    };
+}
+function duelJoin(ctx, logger, nk, dispatcher, tick, s, presences) {
+    for (var i = 0; i < presences.length; i++) {
+        var seat = seatOf(s, presences[i].userId);
+        if (seat < 0)
+            continue;
+        var st = s.seats[seat];
+        st.present = true;
+        st.sessionId = presences[i].sessionId;
+        if (s.engine !== null) {
+            // Rejoined: catch them up, and tell the other player they're back.
+            broadcast(dispatcher, OP.START, startMessage(s), [presences[i]]);
+            broadcast(dispatcher, OP.OPPONENT_BACK, { seat: seat });
+        }
+    }
+    if (s.engine === null && s.seats[0] && s.seats[1] && s.seats[0].present && s.seats[1].present) {
+        s.seedHex = randomHex64();
+        s.engine = new MatchEngine(s.seedHex, "hills", RULES.roundsToWin, tossWinner(u64FromHex(s.seedHex)), s.challenge).state;
+        s.history = [];
+        s.deadlineTick = tick + (RULES.shotTimeLimitSeconds + ANIMATION_ALLOWANCE_S) * TICK_RATE;
+        broadcast(dispatcher, OP.START, startMessage(s));
+        logger.info("duel %s started, seed %s", s.code, s.seedHex);
+    }
+    dispatcher.matchLabelUpdate(label(s));
+    return { state: s };
+}
+function duelLeave(ctx, logger, nk, dispatcher, tick, s, presences) {
+    for (var i = 0; i < presences.length; i++) {
+        var seat = seatOf(s, presences[i].userId);
+        if (seat < 0)
+            continue;
+        var st = s.seats[seat];
+        if (st.sessionId !== presences[i].sessionId)
+            continue;
+        st.present = false;
+        st.awaySince = tick;
+        if (s.engine === null)
+            s.seats[seat] = null; // left the waiting room
+        else if (s.endedTick < 0)
+            broadcast(dispatcher, OP.OPPONENT_AWAY, { seat: seat, graceSeconds: AWAY_GRACE_S });
+    }
+    dispatcher.matchLabelUpdate(label(s));
+    if (!s.seats[0] && !s.seats[1])
+        return null;
+    return { state: s };
+}
+function playShot(s, dispatcher, tick, angleTenths, powerPermille, timedOut) {
+    var e = MatchEngine.wrap(s.engine);
+    var r = e.submit(angleTenths, powerPermille);
+    var msg = { turn: r.turn, shooter: r.shooter, angleTenths: r.angleTenths, powerPermille: r.powerPermille,
+        health: r.health, events: r.events, timedOut: timedOut };
+    s.history.push(msg);
+    broadcast(dispatcher, OP.RESULT, msg);
+    var roundBreak = e.state.phase.kind === "roundOver";
+    if (roundBreak)
+        e.startNextRound();
+    if (e.state.phase.kind === "matchOver") {
+        broadcast(dispatcher, OP.END, { winner: e.state.phase.winner, reason: "won" });
+        s.endedTick = tick;
+    }
+    else {
+        s.deadlineTick = tick + (RULES.shotTimeLimitSeconds + ANIMATION_ALLOWANCE_S + (roundBreak ? ROUND_BREAK_S : 0)) * TICK_RATE;
+    }
+}
+function duelLoop(ctx, logger, nk, dispatcher, tick, s, messages) {
+    s.tick = tick;
+    if (s.endedTick >= 0)
+        return tick - s.endedTick > 10 * TICK_RATE ? null : { state: s };
+    // Nobody came: close an empty waiting room after ten minutes.
+    if (s.engine === null)
+        return tick > 600 * TICK_RATE ? null : { state: s };
+    var e = MatchEngine.wrap(s.engine);
+    for (var i = 0; i < messages.length; i++) {
+        var m = messages[i];
+        var seat = seatOf(s, m.sender.userId);
+        if (seat < 0)
+            continue;
+        var body = {};
+        try {
+            body = JSON.parse(nk.binaryToString(m.data));
+        }
+        catch (err) {
+            continue;
+        }
+        if (m.opCode === OP.LEAVE) {
+            e.forfeit(seat);
+            broadcast(dispatcher, OP.END, { winner: 1 - seat, reason: "forfeit" });
+            s.endedTick = tick;
+            return { state: s };
+        }
+        if (m.opCode === OP.READY) {
+            // The next shooter has finished watching: start their shot clock (plus a little grace).
+            if (seat === e.state.currentShooter && body.turn === e.state.turn)
+                s.deadlineTick = tick + (RULES.shotTimeLimitSeconds + 3) * TICK_RATE;
+            continue;
+        }
+        if (m.opCode === OP.SHOT) {
+            var a = body.angleTenths, p = body.powerPermille;
+            var valid = e.state.phase.kind === "awaitingShot" && seat === e.state.currentShooter && body.turn === e.state.turn &&
+                typeof a === "number" && typeof p === "number" && a % 1 === 0 && p % 1 === 0 &&
+                a >= AIM.minAngleTenths && a <= AIM.maxAngleTenths && p >= 0 && p <= 1000;
+            if (!valid) {
+                logger.warn("duel %s rejected shot from seat %d for turn %d (expected %d)", s.code, seat, body.turn, e.state.turn);
+                broadcast(dispatcher, OP.REJECT, { turn: body.turn, expectedTurn: e.state.turn }, [m.sender]);
+                continue;
+            }
+            playShot(s, dispatcher, tick, a, p, false);
+            if (s.endedTick >= 0) {
+                logger.info("duel %s over after %d turns: seat %d won", s.code, e.state.turn - 1, e.state.phase.winner);
+                return { state: s };
+            }
+        }
+    }
+    // Someone gone too long forfeits.
+    for (var i = 0; i < 2; i++) {
+        var st = s.seats[i];
+        if (st && !st.present && tick - st.awaySince > AWAY_GRACE_S * TICK_RATE) {
+            e.forfeit(i);
+            broadcast(dispatcher, OP.END, { winner: 1 - i, reason: "left" });
+            s.endedTick = tick;
+            return { state: s };
+        }
+    }
+    // Shot clock ran out: the arrow drops at their feet (power 0, A6.11).
+    if (tick > s.deadlineTick && e.state.phase.kind === "awaitingShot") {
+        logger.info("duel %s: shot clock ran out for seat %d (turn %d)", s.code, e.state.currentShooter, e.state.turn);
+        playShot(s, dispatcher, tick, 200, 0, true);
+    }
+    return { state: s };
+}
+function duelTerminate(ctx, logger, nk, dispatcher, tick, s, grace) {
+    return { state: s };
+}
+function duelSignal(ctx, logger, nk, dispatcher, tick, s, data) {
+    if (data === "history" && s.engine) {
+        var e = s.engine;
+        return { state: s, data: JSON.stringify({ seed: s.seedHex, turn: e.turn, round: e.round, currentShooter: e.currentShooter,
+                roundFirstShooter: e.roundFirstShooter, health: e.health, history: s.history }) };
+    }
+    return { state: s, data: label(s) };
+}
+/// Debug: a duel's full official history, by code.
+function rpcDuelHistory(ctx, logger, nk, payload) {
+    var code = JSON.parse(payload || "{}").code;
+    var found = nk.storageRead([{ collection: CODE_COLLECTION, key: code, userId: SYSTEM_USER }]);
+    if (found.length === 0)
+        return JSON.stringify({ error: "no_such_code" });
+    return nk.matchSignal(found[0].value.matchId, "history");
+}
 // Longbow server runtime entry point (spec A22).
 function rpcPing(ctx, logger, nk, payload) {
     return JSON.stringify({ ok: true, server: "longbow" });
@@ -352,5 +936,12 @@ function rpcSimulateShots(ctx, logger, nk, payload) {
 function InitModule(ctx, logger, nk, initializer) {
     initializer.registerRpc("ping", rpcPing);
     initializer.registerRpc("simulate_shots", rpcSimulateShots);
-    logger.info("Longbow runtime loaded (physics v4)");
+    initializer.registerRpc("create_duel", rpcCreateDuel);
+    initializer.registerRpc("join_duel", rpcJoinDuel);
+    initializer.registerRpc("duel_history", rpcDuelHistory);
+    initializer.registerMatch(DUEL_MODULE, {
+        matchInit: duelInit, matchJoinAttempt: duelJoinAttempt, matchJoin: duelJoin, matchLeave: duelLeave,
+        matchLoop: duelLoop, matchTerminate: duelTerminate, matchSignal: duelSignal,
+    });
+    logger.info("Longbow runtime loaded (physics v4, duels)");
 }

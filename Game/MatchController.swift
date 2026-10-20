@@ -1,16 +1,43 @@
 import LongbowCore
+import os
 import SpriteKit
 import SwiftUI
 
-/// vs the computer (A7.1), or two people passing one phone.
+/// Turn-by-turn trace for online duels (kept by the system log).
+private let duelLog = Logger(subsystem: "com.tejusrevi.longbow", category: "duel")
+
+/// vs the computer (A7.1), two people passing one phone, or a friend duel
+/// over the internet (A7.2).
 enum MatchMode: Equatable {
     case vsAI(AIDifficulty)
     case passAndPlay
+    case online(OnlineMatch)
 
     var difficulty: AIDifficulty? {
         if case let .vsAI(d) = self { return d }
         return nil
     }
+
+    var isOnline: Bool {
+        if case .online = self { return true }
+        return false
+    }
+
+    var analyticsName: String {
+        switch self {
+        case .vsAI: return "ai"
+        case .passAndPlay: return "pass_and_play"
+        case .online: return "friend_live"
+        }
+    }
+}
+
+/// A running friend duel: the connection plus what the server said at the start.
+struct OnlineMatch: Equatable {
+    let duel: FriendDuel
+    let start: DuelStart
+
+    static func == (a: OnlineMatch, b: OnlineMatch) -> Bool { a.duel === b.duel }
 }
 
 /// Result of a finished match, for the result screen (spec A6.9).
@@ -26,8 +53,14 @@ struct MatchSummary: Identifiable, Equatable {
     let xpBefore: Int
     let rewards: MatchRewards?
     let forfeited: Bool
+    /// Which side this device played (0 = left).
+    var me: Int = 0
+    var avatars: [Avatar] = [.bjorn, .gus]
+    var hats: [Hat] = [.none, .none]
+    /// Set when the opponent left an online match early.
+    var opponentLeft = false
 
-    var won: Bool { winner == 0 }
+    var won: Bool { winner == me }
 }
 
 /// Runs a match: owns the Core `MatchEngine` (and the AI for vs-AI play) and
@@ -90,6 +123,18 @@ final class MatchController: ObservableObject {
     let difficulty: AIDifficulty
     /// Players controlled by touch.
     let humans: Set<Int>
+    /// The side this device plays (0 = left; pass and play counts as 0).
+    let me: Int
+    let avatars: [Avatar]
+    let hats: [Hat]
+    private var online: OnlineMatch? { if case let .online(o) = mode { return o }; return nil }
+    /// Official results from the server, by turn.
+    private var serverResults: [Int: DuelResult] = [:]
+    /// What this device computed for each turn, to check against the server.
+    private var localReports: [Int: TurnReport] = [:]
+    private var opponentLeft = false
+    /// This device and the server disagree: rebuild from the server's history.
+    private var needsResync = false
     let services: Services
     let scene: MatchScene
     var onFinish: ((MatchSummary) -> Void)?
@@ -119,8 +164,22 @@ final class MatchController: ObservableObject {
         self.mode = mode
         let difficulty = mode.difficulty ?? .medium
         self.difficulty = difficulty
-        humans = mode == .passAndPlay ? [0, 1] : [0]
         var names = mode == .passAndPlay ? ["PLAYER 1", "PLAYER 2"] : ["YOU", "GUS"]
+        var avatars: [Avatar] = [services.progress.avatar, .gus]
+        var hats: [Hat] = [services.progress.equippedHat, mode == .passAndPlay ? .featherCap : .none]
+        if case let .online(o) = mode {
+            humans = [o.start.seat]
+            me = o.start.seat
+            names = o.start.players.map(\.name)
+            names[o.start.seat] = "YOU"
+            avatars = o.start.players.map(\.avatar)
+            hats = o.start.players.map(\.hat)
+        } else {
+            humans = mode == .passAndPlay ? [0, 1] : [0]
+            me = 0
+        }
+        self.avatars = avatars
+        self.hats = hats
         #if DEBUG
         // `-playerName BraveYew_42` tests long gamertags in the HUD.
         if let i = ProcessInfo.processInfo.arguments.firstIndex(of: "-playerName"),
@@ -140,9 +199,14 @@ final class MatchController: ObservableObject {
             game.damage.head = 100; game.damage.body = 100; game.damage.legs = 100
         }
         #endif
-        let setup = MatchSetup(seed: seed, arena: .hills, roundsToWin: game.rules.roundsToWin,
+        var setup = MatchSetup(seed: seed, arena: .hills, roundsToWin: game.rules.roundsToWin,
                                firstShooter: MatchSetup.tossWinner(seed: seed),
                                challenge: HitChallenge(rawValue: difficulty.rawValue) ?? .medium)
+        if case let .online(o) = mode {
+            // Exactly what the server set up, so both sides play the same match.
+            setup = MatchSetup(seed: o.start.seed, arena: .hills, roundsToWin: o.start.roundsToWin,
+                               firstShooter: o.start.firstShooter, challenge: o.start.challenge)
+        }
         engine = MatchEngine(setup: setup, config: game)
         ai = AIPlayer(difficulty: difficulty, seed: seed &+ 0xA1)
         #if DEBUG
@@ -152,9 +216,7 @@ final class MatchController: ObservableObject {
         #endif
         health = engine.state.health
         let reduceMotion = UIAccessibility.isReduceMotionEnabled
-        scene = MatchScene(size: sceneSize, appConfig: config, reduceMotion: reduceMotion,
-                           hats: [services.progress.equippedHat, mode == .passAndPlay ? .featherCap : .none],
-                           avatars: [services.progress.avatar, .gus])
+        scene = MatchScene(size: sceneSize, appConfig: config, reduceMotion: reduceMotion, hats: hats, avatars: avatars)
         scene.controller = self
     }
 
@@ -163,8 +225,13 @@ final class MatchController: ObservableObject {
     var distance: Double { engine.state.conditions.distance }
 
     func start() {
-        services.analytics.log("match_start", ["mode": mode == .passAndPlay ? "pass_and_play" : "ai",
+        services.analytics.log("match_start", ["mode": mode.analyticsName,
                                                "difficulty": difficulty.rawValue, "arena": "hills"])
+        if let online {
+            online.duel.attach { [weak self] r in self?.serverResult(r) }
+            online.duel.onEnd = { [weak self] winner, reason in self?.serverEnded(winner: winner, reason: reason) }
+            online.duel.onPresence = { [weak self] seat, away in self?.opponentPresence(seat: seat, away: away) }
+        }
         services.audio.stopMusic()
         beginRound()
     }
@@ -189,18 +256,32 @@ final class MatchController: ObservableObject {
 
     private func beginTurn() {
         guard !finished else { return }
+        if needsResync { return resyncFromServer() }
         updateWind()
         let shooter = engine.state.currentShooter
-        if humans.contains(shooter) && !(shooter == 0 && autoplayAI != nil) {
+        if online != nil {
+            duelLog.notice("beginTurn turn=\(self.engine.state.turn) shooter=\(shooter) me=\(self.me) round=\(self.engine.state.round) first=\(self.engine.state.roundFirstShooter) phase=\(String(describing: self.engine.state.phase), privacy: .public)")
+        }
+        // Our turn has really started: the server starts our shot clock now.
+        if let online, shooter == me { online.duel.sendReady(turn: engine.state.turn) }
+        if humans.contains(shooter) && !(shooter == me && autoplayAI != nil) {
             phase = .aiming
             timeLeft = config.game.rules.shotTimeLimitSeconds
             exactTimeLeft = nil
             scene.beginHumanAim(shooter: shooter, lastBreath: engine.state.lastBreath, ghostShot: lastShot[shooter])
+            // The server already played this turn for us (the clock ran out while we were away).
+            if online != nil, let r = serverResults[engine.state.turn], r.shooter == me { applyServerShot(r) }
             // A protest is under way nearby: a flutter of wings, once a round.
             if scene.noticeProtester() { services.haptics.flutter() }
             if mode == .passAndPlay {
                 withAnimation { turnNote = "\(names[shooter].lowercased()), you're up." }
                 scene.run(.wait(forDuration: 2.2)) { [weak self] in withAnimation { self?.turnNote = nil } }
+            }
+        } else if online != nil && shooter != me {
+            phase = .aiThinking
+            scene.setLastBreath(engine.state.lastBreath ? shooter : nil)
+            if let r = serverResults[engine.state.turn] { playRemote(r) } else if !opponentLeft {
+                withAnimation { turnNote = "\(names[shooter].lowercased()) is aiming..." }
             }
         } else {
             phase = .aiThinking
@@ -214,10 +295,10 @@ final class MatchController: ObservableObject {
     /// Starts the AI's search for the upcoming shot in the background.
     private func planAIShotIfNeeded() {
         let shooter = engine.state.currentShooter
-        guard engine.state.phase == .awaitingShot,
-              !humans.contains(shooter) || (shooter == 0 && autoplayAI != nil) else { return }
+        let autoplaysMe = shooter == me && autoplayAI != nil
+        guard engine.state.phase == .awaitingShot, autoplaysMe || (online == nil && !humans.contains(shooter)) else { return }
         let engineCopy = engine
-        var aiCopy = shooter == 1 ? ai : autoplayAI!
+        var aiCopy = autoplaysMe ? autoplayAI! : ai
         aiPlan = Task.detached(priority: .userInitiated) {
             let shot = aiCopy.chooseShot(engine: engineCopy)
             return (shot, aiCopy)
@@ -228,18 +309,21 @@ final class MatchController: ObservableObject {
         if aiPlan == nil { planAIShotIfNeeded() }
         let plan = aiPlan
         aiPlan = nil
-        var thinker = shooter == 1 ? ai : autoplayAI!
+        let autoplaysMe = shooter == me && autoplayAI != nil
+        var thinker = autoplaysMe ? autoplayAI! : ai
         let think = thinker.thinkTime()
         aiTask = Task { [weak self] in
             let started = Date()
             guard let input = await plan?.value else { return }
             guard let self, !Task.isCancelled else { return }
-            if shooter == 1 { self.ai = input.1 } else { self.autoplayAI = input.1 }
+            if autoplaysMe { self.autoplayAI = input.1 } else { self.ai = input.1 }
             let remaining = max(0.9, think + 0.9 - Date().timeIntervalSince(started))
             self.isAIDrawing = true
             self.scene.animateAIDraw(input.0, shooter: shooter, duration: remaining) { [weak self] in
-                self?.isAIDrawing = false
-                self?.submit(input.0)
+                guard let self else { return }
+                self.isAIDrawing = false
+                // DEBUG autoplay online: the stand-in AI's shot goes to the server like a person's.
+                self.submit(autoplaysMe ? self.sendOwnShot(input.0) : input.0)
             }
         }
     }
@@ -248,7 +332,121 @@ final class MatchController: ObservableObject {
     func humanReleased(_ input: ShotInput) {
         timeLeft = nil
         exactTimeLeft = nil
-        submit(input)
+        submit(sendOwnShot(input))
+    }
+
+    /// Sends our shot to the server — unless the server already fired this
+    /// turn for us, in which case its shot is the one that counts.
+    private func sendOwnShot(_ input: ShotInput) -> ShotInput {
+        guard let online else { return input }
+        if let r = serverResults[engine.state.turn], r.shooter == me { return r.input }
+        online.duel.sendShot(turn: engine.state.turn, input: input.clamped(config.game.aim))
+        return input
+    }
+
+    // MARK: Online
+
+    /// The server's official result for a turn.
+    private func serverResult(_ r: DuelResult) {
+        duelLog.notice("serverResult turn=\(r.turn) shooter=\(r.shooter) a=\(r.input.angleTenths) p=\(r.input.powerPermille) timedOut=\(r.timedOut) local=\(self.localReports[r.turn] != nil) engineTurn=\(self.engine.state.turn) phase=\(String(describing: self.phase), privacy: .public)")
+        serverResults[r.turn] = r
+        if let mine = localReports[r.turn] {
+            // Already played here: check the server agrees.
+            if mine.health != r.health || mine.input != r.input {
+                services.analytics.log("sim_mismatch", ["turn": r.turn, "local": "\(mine.health)", "server": "\(r.health)"])
+                needsResync = true
+                // Idle and waiting? Catch up right away; otherwise at the next turn.
+                if phase == .aiThinking && !isAIDrawing { resyncFromServer() }
+            }
+            return
+        }
+        guard r.turn == engine.state.turn, engine.state.phase == .awaitingShot else { return }
+        if r.shooter == me, phase == .aiming {
+            applyServerShot(r)
+        } else if r.shooter != me, phase == .aiThinking {
+            playRemote(r)
+        }
+    }
+
+    /// Rebuilds the match from the server's official results and carries on
+    /// from there. Only happens if this device fell out of step.
+    private func resyncFromServer() {
+        duelLog.notice("resync from server, \(self.serverResults.count) results")
+        needsResync = false
+        aiTask?.cancel()
+        isAIDrawing = false
+        var e = MatchEngine(setup: engine.state.setup, config: engine.config)
+        for t in serverResults.keys.sorted() {
+            if case .roundOver = e.state.phase { e.startNextRound() }
+            guard e.state.phase == .awaitingShot, t == e.state.turn, let r = serverResults[t] else { break }
+            let report = e.submit(r.input)
+            localReports[t] = report
+        }
+        if case .roundOver = e.state.phase { e.startNextRound() }
+        engine = e
+        health = engine.state.health
+        roundsWon = engine.state.roundsWon
+        round = engine.state.round
+        services.analytics.log("duel_resync", ["turn": engine.state.turn])
+        if engine.state.isOver {
+            finish(forfeited: false)
+            return
+        }
+        scene.loadRound(engine.state.conditions)
+        updateWind()
+        phase = .presenting
+        scene.panTo(shooter: engine.state.currentShooter) { [weak self] in self?.beginTurn() }
+    }
+
+    /// The server fired our shot for us (our clock ran out).
+    private func applyServerShot(_ r: DuelResult) {
+        guard phase == .aiming else { return }
+        scene.endHumanAim()
+        timeLeft = nil
+        exactTimeLeft = nil
+        submit(r.input)
+    }
+
+    /// The opponent's shot: draw the bow, then let it fly.
+    private func playRemote(_ r: DuelResult) {
+        withAnimation { turnNote = nil }
+        isAIDrawing = true
+        scene.animateAIDraw(r.input, shooter: r.shooter, duration: 1.1) { [weak self] in
+            self?.isAIDrawing = false
+            self?.submit(r.input)
+        }
+    }
+
+    private func serverEnded(winner: Int, reason: String) {
+        guard !finished else { return }
+        switch reason {
+        case "won":
+            break // the last result plays out here and ends the match on its own
+        case "forfeit" where winner == me, "left" where winner == me:
+            // The other archer walked off. Their loss.
+            opponentLeft = true
+            engine.forfeit(by: 1 - me)
+            aiTask?.cancel()
+            withAnimation { turnNote = nil }
+            showBanner(Banner(title: "YOU WIN", subtitle: "\(names[1 - me].lowercased()) left the duel")) { [weak self] in
+                self?.finish(forfeited: false)
+            }
+        default:
+            // We were dropped (or forfeited from elsewhere).
+            showBanner(Banner(title: "DISCONNECTED", subtitle: "the duel ended")) { [weak self] in
+                guard let self else { return }
+                self.engine.forfeit(by: self.me)
+                self.finish(forfeited: true)
+            }
+        }
+    }
+
+    private func opponentPresence(seat: Int, away: Bool) {
+        guard seat != me, !finished else { return }
+        withAnimation { turnNote = away ? "\(names[seat].lowercased()) lost connection..." : nil }
+        if !away, phase == .aiThinking, serverResults[engine.state.turn] == nil {
+            withAnimation { turnNote = "\(names[seat].lowercased()) is aiming..." }
+        }
     }
 
     func preview(_ input: ShotInput) -> ShotOutcome {
@@ -268,11 +466,18 @@ final class MatchController: ObservableObject {
         flightConditions = engine.state.conditions
         // Brace arrives in Milestone 3; until then every hit lands in full.
         let report = engine.submit(input, braceMultiplier: 1)
-        if shooter == 1 { ai.observe(report) } else { autoplayAI?.observe(report) }
+        localReports[report.turn] = report
+        if online != nil {
+            duelLog.notice("submit turn=\(report.turn) shooter=\(report.shooter) a=\(report.input.angleTenths) p=\(report.input.powerPermille) events=\(report.events.map { String(describing: $0) }.joined(separator: ","), privacy: .public)")
+        }
+        if let server = serverResults[report.turn], server.health != report.health {
+            services.analytics.log("sim_mismatch", ["turn": report.turn, "local": "\(report.health)", "server": "\(server.health)"])
+        }
+        if online == nil { if shooter == 1 { ai.observe(report) } else { autoplayAI?.observe(report) } }
         lastShot[shooter] = report.outcome
         let medals = track(report)
         services.analytics.log("shot_taken", [
-            "mode": "ai", "round": report.round, "turn": report.turn,
+            "mode": mode.analyticsName, "round": report.round, "turn": report.turn,
             "angleTenths": report.input.angleTenths, "powerPermille": report.input.powerPermille,
             "result": report.outcome.hitPart?.rawValue ?? "miss", "damage": report.damage,
             "distanceToTarget": report.missDistance ?? 0,
@@ -292,7 +497,7 @@ final class MatchController: ObservableObject {
         let hitTarget = r.outcome.hitArcher == target
         hitStreak[shooter] = hitTarget ? hitStreak[shooter] + 1 : 0
         let firstShot = engine.state.suddenDeath == 0 && engine.state.shotsThisRound[shooter] == 1
-        if shooter == 0 {
+        if shooter == me {
             if hitTarget {
                 stats.hits += 1
                 if r.outcome.hitPart == .head { stats.headshots += 1 }
@@ -359,16 +564,16 @@ final class MatchController: ObservableObject {
         case .roundOver:
             phase = .between
             roundsWon = engine.state.roundsWon
-            let you = engine.state.roundsWon[0], them = engine.state.roundsWon[1]
+            let you = engine.state.roundsWon[me], them = engine.state.roundsWon[1 - me]
             services.audio.play(.jingleRound)
             let winner = { if case let .roundOver(w, _) = event { return w }; return 0 }()
-            if winner == 0 && damageTakenThisRound[0] == 0 { stats.cleanRounds += 1 }
-            if mode == .passAndPlay || winner == 0 { services.haptics.roundWon() } else { services.haptics.roundLost() }
+            if winner == me && damageTakenThisRound[me] == 0 { stats.cleanRounds += 1 }
+            if mode == .passAndPlay || winner == me { services.haptics.roundWon() } else { services.haptics.roundLost() }
             let subtitle: String
             if mode == .passAndPlay {
                 subtitle = "round to \(names[winner].lowercased())"
             } else {
-                subtitle = winner == 0 ? (damageTakenThisRound[0] == 0 ? "flawless." : "round won") : "round lost"
+                subtitle = winner == me ? (damageTakenThisRound[me] == 0 ? "flawless." : "round won") : "round lost"
             }
             showBanner(Banner(title: "\(you)–\(them)", subtitle: subtitle)) { [weak self] in
                 guard let self else { return }
@@ -378,8 +583,8 @@ final class MatchController: ObservableObject {
         case let .matchOver(winner):
             roundsWon = engine.state.roundsWon
             phase = .over
-            services.audio.play(winner == 0 || mode == .passAndPlay ? .jingleMatch : .jingleLose)
-            if winner == 0 || mode == .passAndPlay { services.haptics.success() } else { services.haptics.roundLost() }
+            services.audio.play(winner == me || mode == .passAndPlay ? .jingleMatch : .jingleLose)
+            if winner == me || mode == .passAndPlay { services.haptics.success() } else { services.haptics.roundLost() }
             scene.archers[winner].setExpression(.victorious)
             scene.archers[1 - winner].setExpression(.defeated)
             scene.run(.wait(forDuration: 1.6)) { [weak self] in self?.finish(forfeited: false) }
@@ -421,7 +626,8 @@ final class MatchController: ObservableObject {
     private var exactTimeLeft: Double?
 
     func forfeit() {
-        engine.forfeit(by: engine.state.currentShooter == 1 && mode == .passAndPlay ? 1 : 0)
+        online?.duel.leave()
+        engine.forfeit(by: engine.state.currentShooter == 1 && mode == .passAndPlay ? 1 : me)
         aiTask?.cancel()
         aiPlan?.cancel()
         finish(forfeited: true)
@@ -444,35 +650,37 @@ final class MatchController: ObservableObject {
         aiTask?.cancel()
         aiPlan?.cancel()
         scene.isGamePaused = true
+        online?.duel.leave()
         if mode != .passAndPlay {
-            engine.forfeit(by: 0)
+            engine.forfeit(by: me)
             stats.won = false
             stats.forfeited = true
             _ = services.progress.record(stats, xp: services.config.xp)
         }
-        services.analytics.log("match_end", ["mode": mode == .passAndPlay ? "pass_and_play" : "ai",
-                                             "outcome": "quit", "forfeit": true])
+        services.analytics.log("match_end", ["mode": mode.analyticsName, "outcome": "quit", "forfeit": true])
     }
 
     private func finish(forfeited: Bool) {
         guard !finished else { return }
         finished = true
-        let winner = engine.state.winner ?? 1
+        let winner = engine.state.winner ?? (1 - me)
         let before = services.progress.totalXP
         var rewards: MatchRewards?
         if mode != .passAndPlay {
-            stats.won = winner == 0
+            stats.won = winner == me
             stats.forfeited = forfeited
             rewards = services.progress.record(stats, xp: services.config.xp)
         }
         services.analytics.log("match_end", [
-            "mode": mode == .passAndPlay ? "pass_and_play" : "ai", "outcome": winner == 0 ? "win" : "loss",
+            "mode": mode.analyticsName, "outcome": winner == me ? "win" : "loss",
             "rounds": engine.state.round, "durationS": Int(Date().timeIntervalSince(startedAt)), "forfeit": forfeited,
         ])
         onFinish?(MatchSummary(
             mode: mode, names: names, winner: winner, score: engine.state.roundsWon,
-            arrowsLanded: engine.state.hitsLanded[winner], headshots: engine.state.headshots[0],
-            xpBefore: before, rewards: rewards, forfeited: forfeited
+            arrowsLanded: engine.state.hitsLanded[winner], headshots: engine.state.headshots[me],
+            xpBefore: before, rewards: rewards, forfeited: forfeited, me: me, avatars: avatars, hats: hats,
+            opponentLeft: opponentLeft
         ))
+        online?.duel.close()
     }
 }

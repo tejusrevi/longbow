@@ -7,6 +7,7 @@ import SwiftUI
 /// hats and records).
 struct HomeView: View {
     let onPlay: (MatchMode) -> Void
+    var onOnline: () -> Void = {}
     @Environment(\.services) private var services
     @EnvironmentObject private var progress: ProgressStore
     @State private var scene: HomeScene?
@@ -70,7 +71,7 @@ struct HomeView: View {
                                         onClose: { self.sheet = nil })
                     case .multiplayer:
                         MultiplayerSheet(onPassAndPlay: { self.sheet = nil; onPlay(.passAndPlay) },
-                                         onOnline: { self.sheet = .onlineSoon },
+                                         onOnline: { self.sheet = nil; onOnline() },
                                          onClose: { self.sheet = nil })
                     case .profile:
                         ProfileSheet { self.sheet = nil }
@@ -231,7 +232,7 @@ struct DifficultySheet: View {
     }
 }
 
-/// Multi player: pass and play on one phone now; online in Milestone 2.
+/// Multi player: pass and play on one phone, or a friend duel online.
 private struct MultiplayerSheet: View {
     let onPassAndPlay: () -> Void
     let onOnline: () -> Void
@@ -256,11 +257,10 @@ private struct MultiplayerSheet: View {
                     Button(action: onOnline) {
                         VStack(spacing: 4) {
                             Text("ONLINE")
-                            Text("soon").font(Theme.mono(12)).tracking(0)
+                            Text("friend duel by code").font(Theme.mono(12)).tracking(0)
                         }
                     }
                     .buttonStyle(PillButtonStyle(primary: false))
-                    .opacity(0.55)
                 }
             }
             .padding(32)

@@ -9,6 +9,8 @@ final class Services {
     let haptics: HapticsService
     let analytics: AnalyticsService
     let monetization: MonetizationService
+    /// The game server (friend duels and, later, accounts and leagues).
+    @MainActor lazy var online: NakamaClient = .live()
 
     init(
         settings: SettingsStore,

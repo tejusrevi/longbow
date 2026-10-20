@@ -12,11 +12,14 @@ struct MatchResultView: View {
     @State private var xpShown: Int = 0
     @State private var revealed = 0
 
-    private var scoreText: String { "\(summary.score[0])–\(summary.score[1])" }
+    /// Score from this player's side.
+    private var scoreText: String { "\(summary.score[summary.me])–\(summary.score[1 - summary.me])" }
+    private var opponentName: String { summary.mode.isOnline ? summary.names[1 - summary.me].capitalized : "Gus" }
 
     private var title: String {
         if summary.mode == .passAndPlay { return "\(summary.names[summary.winner]) WINS" }
         if summary.forfeited { return "FORFEITED" }
+        if summary.opponentLeft { return "THEY LEFT. YOU WIN" }
         return summary.won ? "YOU WIN" : "YOU LOSE"
     }
 
@@ -30,7 +33,7 @@ struct MatchResultView: View {
                         .monospacedDigit()
                         .minimumScaleFactor(0.5)
                         .lineLimit(1)
-                        .accessibilityLabel(Text("Score \(summary.score[0]) to \(summary.score[1])"))
+                        .accessibilityLabel(Text("Score \(summary.score[summary.me]) to \(summary.score[1 - summary.me])"))
                     if let rewards = summary.rewards {
                         xpBar(rewards).frame(width: min(400, geo.size.width * 0.4))
                         rewardLines(rewards)
@@ -92,8 +95,8 @@ struct MatchResultView: View {
             return "\(summary.names[summary.winner]) won \(scoreText) in \(AppInfo.displayName)."
         }
         return summary.won
-            ? "I beat Gus \(scoreText) in \(AppInfo.displayName)."
-            : "Gus beat me \(summary.score[1])–\(summary.score[0]) in \(AppInfo.displayName). Rematch."
+            ? "I beat \(opponentName) \(scoreText) in \(AppInfo.displayName)."
+            : "\(opponentName) beat me \(summary.score[1 - summary.me])–\(summary.score[summary.me]) in \(AppInfo.displayName). Rematch."
     }
 
     private func xpBar(_ r: MatchRewards) -> some View {
@@ -134,16 +137,20 @@ struct MatchResultView: View {
     }
 
     private func loserPortrait(size: CGFloat) -> some View {
-        let loserIsGus = summary.winner == 0
+        let loser = 1 - summary.winner
+        let loserIsGus = loser == 1
         let look: ArcherLook = loserIsGus ? .gus : .bjorn
+        // Whoever lost, as they actually looked in the match.
+        let face = summary.avatars.indices.contains(loser) ? summary.avatars[loser] : nil
+        let hat = summary.mode.isOnline ? summary.hats[loser]
+            : (look == .bjorn ? progress.equippedHat : (summary.mode == .passAndPlay ? .featherCap : .none))
         return ZStack {
             Circle()
                 .fill(Color.clear)
                 .overlay(DotPattern(spacing: 7, radius: 1.3).clipShape(Circle()))
                 .frame(width: size * 1.25, height: size * 1.25)
             Circle().fill(Color.paper).frame(width: size, height: size)
-            PortraitView(look: look, expression: .defeated,
-                         hat: look == .bjorn ? progress.equippedHat : (summary.mode == .passAndPlay ? .featherCap : .none))
+            PortraitView(look: look, expression: .defeated, hat: hat, avatar: summary.mode.isOnline ? face : nil)
                 .frame(width: size, height: size)
             // Every arrow the winner landed, stuck around the portrait.
             ForEach(0..<min(12, summary.arrowsLanded), id: \.self) { i in
@@ -167,7 +174,7 @@ struct MatchResultView: View {
             }
         }
         .accessibilityElement()
-        .accessibilityLabel(Text("\(loserIsGus ? "Gus" : summary.names[0]), with \(summary.arrowsLanded) arrows landed"))
+        .accessibilityLabel(Text("\(summary.mode.isOnline || !loserIsGus ? summary.names[loser] : "Gus"), with \(summary.arrowsLanded) arrows landed"))
     }
 
     private func hatUnlock(_ hat: Hat, size: CGFloat) -> some View {

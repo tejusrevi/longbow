@@ -38,6 +38,7 @@
 		5C7C62A2B6B3EBDAC788E589 /* ArtLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DCBEE3457F95687615921D0 /* ArtLibrary.swift */; };
 		653D1ADB0BC928AF35F0561B /* InkBrush.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAEBBE8ED85287C0D3B23315 /* InkBrush.swift */; };
 		65C366EFFF0640882C539A42 /* creak_1.wav in Resources */ = {isa = PBXBuildFile; fileRef = 8FAD4A9551C19669AD407B22 /* creak_1.wav */; };
+		6A182A3F484F2EAD4B37AF63 /* OnlineService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E3AC5B5151A8F739AD236EC /* OnlineService.swift */; };
 		6B1E5E80A8EF44B38F3FF38B /* ProfileSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AE3CA4D0884FFB0167D6590 /* ProfileSheet.swift */; };
 		6F34E5E0321046479A912A71 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E13C6FBB5F865C1E0508C99 /* Components.swift */; };
 		700A8E28BDB2897EB144CBDD /* AvatarArt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 362BC43C3EEAC944952027F4 /* AvatarArt.swift */; };
@@ -61,6 +62,7 @@
 		A4E0E410BE13E711ED821195 /* DefaultConfig.json in Resources */ = {isa = PBXBuildFile; fileRef = 432B8BB747308C28A60D4B3C /* DefaultConfig.json */; };
 		A758E005746C312097DE2D64 /* grunt.wav in Resources */ = {isa = PBXBuildFile; fileRef = C6462F93BBB29D52F03416BA /* grunt.wav */; };
 		AD568AF14B08EA23E1B750B3 /* HomeScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF256C2116BE0A783F979458 /* HomeScene.swift */; };
+		B4DA2DEC54DE9E009442F8C8 /* OnlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B42CFC199DE2485FF130CC1 /* OnlineView.swift */; };
 		B7E489CF1CB5409F75E29069 /* creak_6.wav in Resources */ = {isa = PBXBuildFile; fileRef = 7C44ED40A2D63747C708A747 /* creak_6.wav */; };
 		BA4D96A9F550858C8574A0E6 /* squawk.wav in Resources */ = {isa = PBXBuildFile; fileRef = BDC6F9E901931CFC9125229B /* squawk.wav */; };
 		BEAE54EC8BD74269E78D35A7 /* WorldNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F0BD2D453A2D6F0C6E334A /* WorldNode.swift */; };
@@ -103,6 +105,7 @@
 		22D9E04F99746382C036F3BA /* Services.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services.swift; sourceTree = "<group>"; };
 		23B7C9342486AB9B64D8EBED /* AmbientLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbientLayer.swift; sourceTree = "<group>"; };
 		2ABA5C95515AEBC38D03FEB3 /* Core */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Core; path = Core; sourceTree = SOURCE_ROOT; };
+		2B42CFC199DE2485FF130CC1 /* OnlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnlineView.swift; sourceTree = "<group>"; };
 		362BC43C3EEAC944952027F4 /* AvatarArt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarArt.swift; sourceTree = "<group>"; };
 		3EB91A0FF2E9B1C347AD0789 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		402AF4CCFE2249A45A4C91F2 /* ProtestSign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtestSign.swift; sourceTree = "<group>"; };
@@ -131,6 +134,7 @@
 		88A8C163AAC428761E1BC73D /* TossView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TossView.swift; sourceTree = "<group>"; };
 		8AE3CA4D0884FFB0167D6590 /* ProfileSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileSheet.swift; sourceTree = "<group>"; };
 		8DCBEE3457F95687615921D0 /* ArtLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtLibrary.swift; sourceTree = "<group>"; };
+		8E3AC5B5151A8F739AD236EC /* OnlineService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnlineService.swift; sourceTree = "<group>"; };
 		8FAD4A9551C19669AD407B22 /* creak_1.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = creak_1.wav; sourceTree = "<group>"; };
 		9A65EA7F940D2AB28823FFE6 /* LongbowApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LongbowApp.swift; sourceTree = "<group>"; };
 		9C8567B3B2C9FCE5FA0D6250 /* creak_2.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = creak_2.wav; sourceTree = "<group>"; };
@@ -280,6 +284,7 @@
 				DD65E92D090673FA59F3D155 /* HomeView.swift */,
 				42F9B402C6478D719AD2BAA9 /* MatchResultView.swift */,
 				21FF811D26FC3C6E534A1089 /* MatchView.swift */,
+				2B42CFC199DE2485FF130CC1 /* OnlineView.swift */,
 				8AE3CA4D0884FFB0167D6590 /* ProfileSheet.swift */,
 				88A8C163AAC428761E1BC73D /* TossView.swift */,
 			);
@@ -304,6 +309,7 @@
 				A326AD56D4C8A14DDCC7070B /* AudioService.swift */,
 				E77C5D1BECD9F9AF8F5499F9 /* HapticsService.swift */,
 				45C474D4E2222917DF6B3D25 /* MonetizationService.swift */,
+				8E3AC5B5151A8F739AD236EC /* OnlineService.swift */,
 				D28EED15DA6F9763C5DBEE65 /* ProgressStore.swift */,
 				4873E9FA52EB134A7D2497B7 /* RemoteConfigService.swift */,
 				3EB91A0FF2E9B1C347AD0789 /* SettingsStore.swift */,
@@ -527,6 +533,8 @@
 				DB54D2ECB61D2B0B9B620DCC /* MatchScene.swift in Sources */,
 				012CD3768E749F42B2205EDF /* MatchView.swift in Sources */,
 				FA8FDBD9A00766C544139719 /* MonetizationService.swift in Sources */,
+				6A182A3F484F2EAD4B37AF63 /* OnlineService.swift in Sources */,
+				B4DA2DEC54DE9E009442F8C8 /* OnlineView.swift in Sources */,
 				6B1E5E80A8EF44B38F3FF38B /* ProfileSheet.swift in Sources */,
 				F3E98DC13C113AD08FDDB61E /* ProgressStore.swift in Sources */,
 				C714394796CCE8B64CBF4D03 /* PropsArt.swift in Sources */,

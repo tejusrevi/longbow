@@ -26,13 +26,23 @@ struct MatchRequest: Equatable {
     var mode: MatchMode
     var seed: UInt64 = .random(in: 1...UInt64.max)
 
-    var names: [String] { mode == .passAndPlay ? ["PLAYER 1", "PLAYER 2"] : ["YOU", "GUS"] }
+    var names: [String] {
+        switch mode {
+        case .passAndPlay: return ["PLAYER 1", "PLAYER 2"]
+        case .vsAI: return ["YOU", "GUS"]
+        case let .online(o):
+            var n = o.start.players.map(\.name)
+            n[o.start.seat] = "YOU"
+            return n
+        }
+    }
 }
 
 /// App routing. No tab bar: Home is the hub (spec A5).
 enum Route: Equatable {
     case splash
     case home
+    case online
     case toss(MatchRequest)
     case match(MatchRequest)
     case result(MatchSummary, MatchRequest)
@@ -61,28 +71,34 @@ struct RootView: View {
                     switch Self.debugScreen {
                     case "splash": break
                     case "toss": go(.toss(MatchRequest(mode: .vsAI(.medium))))
+                    case "online": go(.online)
                     default: go(Self.autoplay ? .toss(MatchRequest(mode: .vsAI(.medium))) : .home)
                     }
                 }
             case .home:
-                HomeView { mode in go(.toss(MatchRequest(mode: mode))) }
+                HomeView { mode in go(.toss(MatchRequest(mode: mode))) } onOnline: { go(.online) }
                     .transition(.opacity)
+            case .online:
+                OnlineView { match in
+                    go(.toss(MatchRequest(mode: .online(match), seed: match.start.seed)))
+                } onClose: { go(.home) }
+                .transition(.opacity)
             case let .toss(request):
-                TossView(seed: request.seed, opponent: .gus, names: request.names) { go(.match(request)) }
-                    .transition(.opacity)
+                tossView(request).transition(.opacity)
             case let .match(request):
                 MatchView(request: request) { summary in go(.result(summary, request)) } onQuit: { go(.home) }
                     .transition(.opacity)
             case let .result(summary, request):
                 MatchResultView(summary: summary) {
-                    go(.toss(MatchRequest(mode: request.mode)))
+                    // An online rematch is a fresh duel from the lobby.
+                    go(request.mode.isOnline ? .online : .toss(MatchRequest(mode: request.mode)))
                 } onHome: {
                     go(.home)
                 }
                 .transition(.opacity)
                 .task {
                     // DEBUG soak: keep playing matches back to back.
-                    guard Self.autoplay else { return }
+                    guard Self.autoplay, !request.mode.isOnline else { return }
                     autoplayMatches += 1
                     print("autoplay: finished match \(autoplayMatches), score \(summary.score)")
                     try? await Task.sleep(for: .seconds(2))
@@ -103,6 +119,17 @@ struct RootView: View {
             case "profile": ProfileSheet {}
             default: EmptyView()
             }
+        }
+    }
+
+    @ViewBuilder
+    private func tossView(_ request: MatchRequest) -> some View {
+        if case let .online(o) = request.mode {
+            TossView(seed: request.seed, opponent: .gus, names: request.names,
+                     avatars: o.start.players.map(\.avatar), hats: o.start.players.map(\.hat),
+                     winner: o.start.firstShooter) { go(.match(request)) }
+        } else {
+            TossView(seed: request.seed, opponent: .gus, names: request.names) { go(.match(request)) }
         }
     }
 

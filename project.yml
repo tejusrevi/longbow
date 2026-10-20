@@ -48,6 +48,15 @@ targets:
           - ShantellSans-Bold.ttf
           - LuckiestGuy-Regular.ttf
         ITSAppUsesNonExemptEncryption: false
+        # Development game server (Server/ on the Mac, over the local network).
+        # Change to the hosted server's address once it's online.
+        LongbowServerHost: "10.0.0.101"
+        LongbowServerKey: "longbow-local-key"
+        NSLocalNetworkUsageDescription: Longbow connects to the game server on your network for friend duels.
+        NSAppTransportSecurity:
+          # Development server only: plain HTTP on the local network. The hosted
+          # server will use HTTPS and this exception goes away.
+          NSAllowsArbitraryLoads: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tejusrevi.longbow

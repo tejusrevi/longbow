@@ -9,6 +9,11 @@ struct TossView: View {
     let seed: UInt64
     let opponent: ArcherLook
     var names: [String] = ["YOU", "GUS"]
+    /// Who stands on each side (defaults: you vs Gus).
+    var avatars: [Avatar]? = nil
+    var hats: [Hat]? = nil
+    /// Online, the server's toss decides; offline it's worked out from the seed.
+    var winner: Int? = nil
     let onDone: () -> Void
     @EnvironmentObject private var progress: ProgressStore
     @Environment(\.services) private var services
@@ -17,7 +22,7 @@ struct TossView: View {
     @State private var decided = false
     @State private var finished = false
 
-    private var winner: Int { MatchSetup.tossWinner(seed: seed) }
+    private var tossWinner: Int { winner ?? MatchSetup.tossWinner(seed: seed) }
 
     var body: some View {
         GeometryReader { geo in
@@ -56,11 +61,11 @@ struct TossView: View {
     }
 
     private var headline: String {
-        names[winner] == "YOU" ? "you shoot first!" : "\(names[winner].lowercased()) shoots first!"
+        names[tossWinner] == "YOU" ? "you shoot first!" : "\(names[tossWinner].lowercased()) shoots first!"
     }
 
     private func nameTag(_ i: Int) -> some View {
-        let picked = decided && winner == i
+        let picked = decided && tossWinner == i
         return Text(names[i])
             .font(Theme.display(22))
             .foregroundStyle(picked ? Color.paper : Color.ink)
@@ -75,10 +80,10 @@ struct TossView: View {
 
     private func makeScene(size: CGSize) {
         guard scene == nil else { return }
-        let hats: [Hat] = [progress.equippedHat, names[1] == "GUS" ? .none : .featherCap]
-        let avatars: [Avatar] = [progress.avatar, .gus]
+        let hats: [Hat] = self.hats ?? [progress.equippedHat, names[1] == "GUS" ? .none : .featherCap]
+        let avatars: [Avatar] = self.avatars ?? [progress.avatar, .gus]
         let s = TossScene(size: size, boil: !reduceMotion, fast: reduceMotion, avatars: avatars, hats: hats,
-                          winner: winner)
+                          winner: tossWinner)
         s.onLook = {
             services.audio.play(.tossSpin, volume: 0.4)
             services.haptics.selection()

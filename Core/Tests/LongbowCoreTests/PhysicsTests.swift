@@ -119,3 +119,17 @@ final class PhysicsTests: XCTestCase {
         }
     }
 }
+
+/// The app loads its numbers from Resources/DefaultConfig.json, while the
+/// golden vectors and the server use `GameConfig.default`. They must be the
+/// same, or online play disagrees with the server (and the app plays different
+/// physics from the one that's tested).
+final class ConfigContractTests: XCTestCase {
+    func testBundledConfigMatchesTheCodeDefaults() throws {
+        let url = sharedDirectory.deletingLastPathComponent().appendingPathComponent("Resources/DefaultConfig.json")
+        let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        let game = try JSONSerialization.data(withJSONObject: root["game"]!)
+        let bundled = try JSONDecoder().decode(GameConfig.self, from: game)
+        XCTAssertEqual(bundled, GameConfig.default)
+    }
+}
