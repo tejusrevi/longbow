@@ -36,7 +36,11 @@ final class RulesTests: XCTestCase {
         let r = e.submit(hit(e))
         XCTAssertNotNil(r.outcome.hitPart)
         XCTAssertEqual(e.state.health[1], 0)
-        XCTAssertEqual(r.events, [.nextTurn(shooter: 1, lastBreath: true)])
+        // A strike may also shift the wind's strength; the turn rule is what matters here.
+        XCTAssertEqual(r.events.filter {
+                           switch $0 { case .windChanged, .knockedBack: return false; default: return true }
+                       },
+                       [.nextTurn(shooter: 1, lastBreath: true)])
         XCTAssertTrue(e.state.lastBreath)
         let reply = e.submit(dud)
         XCTAssertEqual(reply.events, [.roundOver(winner: 0, reason: .knockout)])
@@ -116,5 +120,87 @@ final class RulesTests: XCTestCase {
         let r = e.submit(input)
         XCTAssertNotNil(r.nearMiss)
         XCTAssertLessThanOrEqual(r.nearMiss!, 3)
+    }
+
+    /// Wind (A6.6, revised): one direction for the whole match, the same for
+    /// both players, a new strength only after an arrow strikes an archer, and
+    /// always beatable from both sides.
+    func testWindKeepsDirectionAndChangesOnlyAfterStrikes() {
+        for m in 0..<6 {
+            let seed = SplitMix64.hash(4242, UInt64(m))
+            var engine = MatchEngine(setup: MatchSetup(seed: seed, arena: .hills, roundsToWin: 2, firstShooter: m % 2))
+            var ais = [AIPlayer(difficulty: .medium, seed: seed &+ 1, search: .fast),
+                       AIPlayer(difficulty: .hard, seed: seed &+ 2, search: .fast)]
+            var sign: FloatingPointSign? = engine.state.windWorld == 0 ? nil : engine.state.windWorld.sign
+            var shots = 0
+            while !engine.state.isOver && shots < 400 {
+                if case .roundOver = engine.state.phase { engine.startNextRound(); continue }
+                let shooter = engine.state.currentShooter
+                // Both players feel the same world wind.
+                XCTAssertEqual(engine.state.conditions.windRelative * RoundConditions.facing(shooter), engine.state.windWorld)
+                let before = engine.state.windWorld
+                let report = engine.submit(ais[shooter].chooseShot(engine: engine))
+                shots += 1
+                let after = engine.state.windWorld
+                if report.outcome.hitArcher == nil && engine.state.suddenDeath == 0 {
+                    if case .awaitingShot = engine.state.phase { XCTAssertEqual(before, after, "wind changed without a strike") }
+                }
+                if after != 0 {
+                    if sign == nil { sign = after.sign }
+                    XCTAssertEqual(after.sign, sign, "wind flipped direction")
+                }
+                if case .awaitingShot = engine.state.phase {
+                    var c = engine.state.conditions
+                    for s in [0, 1] {
+                        c.windRelative = engine.state.windWorld * RoundConditions.facing(s)
+                        XCTAssertTrue(ShotSearch.isHittable(c, shooter: s, config: engine.config))
+                    }
+                }
+            }
+        }
+    }
+
+    /// A hit knocks the target back (more on harder settings), never past the
+    /// cap, and both archers can always still hit each other.
+    func testHitsKnockTheTargetBack() {
+        for challenge in HitChallenge.allCases {
+            var pushes = 0
+            for m in 0..<4 {
+                let seed = SplitMix64.hash(9090, UInt64(m))
+                var engine = MatchEngine(setup: MatchSetup(seed: seed, arena: .hills, roundsToWin: 2, firstShooter: 0,
+                                                           challenge: challenge))
+                var ais = [AIPlayer(difficulty: .hard, seed: seed &+ 1, search: .fast),
+                           AIPlayer(difficulty: .hard, seed: seed &+ 2, search: .fast)]
+                var shots = 0
+                while !engine.state.isOver && shots < 200 {
+                    if case .roundOver = engine.state.phase {
+                        engine.startNextRound()
+                        XCTAssertEqual(engine.state.conditions.archerOffsets, [0, 0], "new round, back to the start")
+                        continue
+                    }
+                    let before = engine.state.conditions.archerOffsets
+                    let r = engine.submit(ais[engine.state.currentShooter].chooseShot(engine: engine))
+                    shots += 1
+                    for e in r.events {
+                        guard case let .knockedBack(archer, offset) = e else { continue }
+                        pushes += 1
+                        XCTAssertEqual(archer, r.outcome.hitArcher)
+                        let push = offset - before[archer]
+                        XCTAssertGreaterThan(push, 0)
+                        XCTAssertLessThanOrEqual(push, Double(challenge.knockbackTenths.upperBound) / 10 + 1e-9)
+                        XCTAssertLessThanOrEqual(offset, challenge.maxKnockback + 1e-9)
+                        XCTAssertEqual(engine.state.conditions.archerOffsets[archer], offset)
+                    }
+                    if case .awaitingShot = engine.state.phase {
+                        var c = engine.state.conditions
+                        for s in [0, 1] {
+                            c.windRelative = engine.state.windWorld * RoundConditions.facing(s)
+                            XCTAssertTrue(ShotSearch.isHittable(c, shooter: s, config: engine.config), "\(challenge)")
+                        }
+                    }
+                }
+            }
+            XCTAssertGreaterThan(pushes, 0, "\(challenge): hits should knock archers back")
+        }
     }
 }

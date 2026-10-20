@@ -139,7 +139,7 @@ enum AvatarArt {
         drawBeardOver(&c, a.facialHair, s, f, skin: skin)
 
         drawEyes(&c, a.eyes, f, expr)
-        drawBrows(&c, a.brows, f, expr)
+        drawBrows(&c, expr == .angry && a.brows != 4 ? 6 : a.brows, f, expr)
         drawNose(&c, a.nose, f.nose, skin: skin)
         if a.facialHair != 3 && a.accessory != 10 { drawMouth(&c, a.mouth, f.mouth, expr) }
         else if expr == .hit || expr == .victorious { drawMouth(&c, a.mouth, CGPoint(x: f.mouth.x, y: f.mouth.y - 0.04), expr) }
@@ -525,7 +525,7 @@ enum AvatarArt {
 
     private static func drawEyes(_ c: inout InkCanvas, _ style: Int, _ f: Face, _ expr: Expression) {
         switch expr {
-        case .hit, .defeated, .focused, .blink, .victorious:
+        case .hit, .defeated, .focused, .blink, .victorious, .angry:
             expressionEyes(&c, f.e1, f.e2, expr)
             return
         default: break
@@ -597,8 +597,15 @@ enum AvatarArt {
 
     /// Eyes that override a face's own (hits, wins, aiming, blinking).
     static func expressionEyes(_ c: inout InkCanvas, _ e1: CGPoint, _ e2: CGPoint, _ expr: Expression) {
-        for e in [e1, e2] {
+        for (i, e) in [e1, e2].enumerated() {
             switch expr {
+            case .angry: // a glare: pupil under a lid that slants down toward the nose
+                let inward: CGFloat = i == 0 ? 1 : -1
+                c.ellipse(CGPoint(x: e.x + inward * 0.004, y: e.y - 0.006), 0.015, 0.016, fill: .ink, width: 0)
+                c.brush([CGPoint(x: e.x - inward * 0.036, y: e.y + 0.022), CGPoint(x: e.x + inward * 0.034, y: e.y + 0.002)],
+                        width: pen * 1.5, start: 0.5, end: 0.8)
+                c.brush([CGPoint(x: e.x - inward * 0.028, y: e.y - 0.022), CGPoint(x: e.x + inward * 0.026, y: e.y - 0.018)],
+                        width: pen * 0.5, start: 0.3, end: 0.3)
             case .hit: // spirals
                 let pts = (0...18).map { i -> CGPoint in
                     let t = CGFloat(i) / 18 * 4.2 * .pi
@@ -628,7 +635,7 @@ enum AvatarArt {
     // MARK: Brows — most of the personality lives here
 
     private static func drawBrows(_ c: inout InkCanvas, _ style: Int, _ f: Face, _ expr: Expression) {
-        let lift: CGFloat = expr == .relieved || expr == .hit ? 0.022 : (expr == .focused ? -0.012 : 0)
+        let lift: CGFloat = expr == .relieved || expr == .hit ? 0.022 : (expr == .focused || expr == .angry ? -0.014 : 0)
         let e1 = f.e1, e2 = f.e2
         let y1 = e1.y + 0.068 + lift, y2 = e2.y + 0.07 + lift
         func pair(_ l: [CGPoint], _ r: [CGPoint], _ w: CGFloat, _ s0: CGFloat = 0.4, _ s1: CGFloat = 0.15) {
@@ -732,6 +739,9 @@ enum AvatarArt {
             return
         case .defeated:
             c.brush([P(-0.055, -0.012), P(-0.02, 0.008), P(0.02, -0.008), P(0.055, 0.01)], width: pen, start: 0.3, end: 0.3)
+            return
+        case .angry: // a scowl, corners down
+            c.brush([P(-0.05, -0.014), P(-0.02, 0.004), P(0.02, 0.004), P(0.05, -0.014)], width: pen * 1.1, start: 0.4, end: 0.4)
             return
         case .focused:
             c.brush([P(-0.04, 0.002), P(0.04, -0.002)], width: pen * 1.1, start: 0.3, end: 0.3)
@@ -1443,7 +1453,7 @@ enum TigerArt {
         }
 
         switch expr {
-        case .hit, .defeated, .focused, .blink, .victorious:
+        case .hit, .defeated, .focused, .blink, .victorious, .angry:
             AvatarArt.expressionEyes(&c, e1, e2, expr)
         default: // almond eyes, pale irises, big pupils, heavy unimpressed lids
             for (i, e) in [e1, e2].enumerated() {

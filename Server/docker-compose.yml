@@ -1,0 +1,52 @@
+# Local development server: Nakama + Postgres (spec A22).
+#   cd Server && docker compose up -d
+# Console: http://127.0.0.1:7351  (admin / see NAKAMA_CONSOLE_PASSWORD in .env)
+# Production keys never live here: copy .env.example to .env (git-ignored).
+services:
+  postgres:
+    image: postgres:16.15-alpine
+    environment:
+      POSTGRES_DB: nakama
+      POSTGRES_USER: nakama
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localdev}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nakama"]
+      interval: 3s
+      retries: 20
+
+  nakama:
+    image: heroiclabs/nakama:3.41.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -ecx
+      - >
+        /nakama/nakama migrate up --database.address nakama:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nakama &&
+        exec /nakama/nakama
+        --name longbow
+        --database.address nakama:${POSTGRES_PASSWORD:-localdev}@postgres:5432/nakama
+        --logger.level INFO
+        --socket.server_key ${NAKAMA_SERVER_KEY:-longbow-local-key}
+        --runtime.http_key ${NAKAMA_HTTP_KEY:-longbow-local-http}
+        --console.username admin
+        --console.password ${NAKAMA_CONSOLE_PASSWORD:-localdev}
+        --session.encryption_key ${NAKAMA_SESSION_KEY:-local-session-key-0000000000}
+        --session.refresh_encryption_key ${NAKAMA_REFRESH_KEY:-local-refresh-key-0000000000}
+        --runtime.js_entrypoint index.js
+    volumes:
+      - ./modules:/nakama/data/modules
+    ports:
+      - "7349:7349"
+      - "7350:7350"
+      - "7351:7351"
+    healthcheck:
+      test: ["CMD", "/nakama/nakama", "healthcheck"]
+      interval: 5s
+      retries: 20
+
+volumes:
+  pgdata:

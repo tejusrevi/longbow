@@ -112,6 +112,7 @@ final class MatchScene: SKScene {
 
     func loadRound(_ conditions: RoundConditions) {
         world?.removeFromParent()
+        liveConditions = conditions
         let w = WorldNode(conditions: conditions, boil: boil)
         worldLayer.addChild(w)
         world = w
@@ -139,6 +140,7 @@ final class MatchScene: SKScene {
                 ArcherNode(look: .gus, facing: -1, boil: boil, lively: !reduceMotion, hat: hats[1], avatar: avatars[1]),
             ]
             for a in archers {
+                a.setCalmExpression(.angry) // game faces on
                 a.setScale(archerScale)
                 a.zPosition = 20
                 worldLayer.addChild(a)
@@ -153,7 +155,12 @@ final class MatchScene: SKScene {
         }
     }
 
-    private var conditions: RoundConditions? { world?.conditions }
+    /// The current field. Archers move when they're knocked back, so this is
+    /// updated after every shot (the world node only holds the round's start).
+    private var liveConditions: RoundConditions?
+    private var conditions: RoundConditions? { liveConditions ?? world?.conditions }
+
+    func updateConditions(_ c: RoundConditions) { liveConditions = c }
 
     /// One or two chickens potter about in the open ground between the archers.
     private func spawnChickens(_ c: RoundConditions) {
@@ -220,6 +227,7 @@ final class MatchScene: SKScene {
         for ch in chickens where !ch.isDead && ch.hitFrame.contains(pos) {
             ch.die(arrowFrom: vx >= 0 ? 1 : -1)
             controller?.chickenDown(shooter: shooter)
+            say(["sorry!!", "not the chicken!", "oh no.", "that one's on me."], by: shooter, chance: 0.8, after: 0.4)
             let note = HUD.label("bawk!", font: GameFont.hand, size: 26)
             hud.addChild(note)
             pin(note, at: CGPoint(x: ch.position.x, y: ch.position.y + 1.0 * archerScale), offset: CGPoint(x: 0, y: 10))
@@ -391,7 +399,7 @@ final class MatchScene: SKScene {
         pin(angleLabel, at: anchor, offset: CGPoint(x: gaugeOffset.x, y: gaugeOffset.y - 8))
 
         // Short aim guide: the first part of the real trajectory.
-        let percent = appConfig.game.aim.aimGuidePercent
+        let percent = controller.aimGuidePercent
         if percent > 0 {
             let o = controller.preview(input)
             let n = max(2, Int(Double(o.path.count) * percent / 100))
@@ -422,6 +430,7 @@ final class MatchScene: SKScene {
     func animateAIDraw(_ input: ShotInput, shooter: Int, duration: Double, completion: @escaping () -> Void) {
         let archer = archers[shooter]
         archer.setExpression(.focused)
+        say(["hmm.", "watch this.", "steady...", "for science.", "this one's for you."], by: shooter, chance: 0.3)
         let startAngle: CGFloat = 10
         let target = CGFloat(input.angleDegrees)
         let targetPower = CGFloat(input.power)
@@ -532,8 +541,9 @@ final class MatchScene: SKScene {
         cam.targetWidth = CGFloat(width)
         cam.targetCenter = CGPoint(x: lead.x, y: max(lead.y, ground + 0.3 * h))
 
-        if f.frame % 4 == 0 {
-            controller?.updateFlight(path: f.path, index: i, distance: abs(pos.x - launch.x))
+        if f.frame % 2 == 0 {
+            controller?.updateFlight(path: f.path, index: i, position: pos, heading: atan2(v.y, v.x),
+                                     distance: abs(pos.x - launch.x), shooter: f.report.shooter)
         }
 
         if idx >= maxIndex {
@@ -599,11 +609,29 @@ final class MatchScene: SKScene {
             pin(note, at: headTop, offset: CGPoint(x: victim.facing * 70, y: 22))
             popIn(note)
 
+            // Knocked back: the victim staggers away from the shooter.
+            for e in r.events {
+                guard case let .knockedBack(archer, offset) = e, archer == index else { continue }
+                let x = index == 0 ? -offset : c.distance + offset
+                let to = CGPoint(x: x, y: c.terrain.height(at: x))
+                victim.stagger(to: to, ground: { CGFloat(c.terrain.height(at: Double($0))) }, delay: 0.55)
+                say(["whoa whoa whoa!", "my feet!", "back off!", "ow, rude."], by: index, chance: 0.5, after: 1.3)
+                if controller.humans.contains(index) {
+                    run(.wait(forDuration: 0.55)) { services.haptics.thud() }
+                }
+                hold += 0.5
+            }
+
             if index != target {
                 showCallout("OOPS", medals: [])
             } else {
                 showCallout(part == .head ? "HEADSHOT" : nil, medals: pendingMedals)
                 archers[r.shooter].celebrate()
+                if part == .head {
+                    say(["nailed it.", "too easy.", "BOOM.", "right in the noggin."], by: r.shooter, chance: 0.7, after: 0.9)
+                } else {
+                    say(["gotcha.", "felt that?", "ha!", "yoink."], by: r.shooter, chance: 0.35, after: 0.9)
+                }
             }
             if part == .head && !reduceMotion { cam.shake(points: 4, duration: 0.2) }
             // Hits zoom in a little quicker so the reaction reads; still eased.
@@ -649,18 +677,32 @@ final class MatchScene: SKScene {
                 cam.targetCenter = CGPoint(x: point.x, y: ground + 0.36 * width * aspect)
                 if (r.missDistance ?? 0) > 15, cam.isVisible(world: CGPoint(x: targetFeet.x, y: targetFeet.y + 1)) {
                     archers[target].taunt()
+                    say(["missed me!", "nice try.", "over here!", "you call that aiming?", "*yawn*"], by: target, chance: 0.75)
+                }
+                if (r.missDistance ?? 0) > 20 {
+                    say(["warm-up shot.", "the wind did that.", "...meant to do that.", "bow's broken."], by: r.shooter,
+                        chance: 0.4, after: 0.4)
                 }
             }
 
         case .outOfBounds, .timeout:
             // Gone. Hold still for a beat, the target looks smug.
             archers[target].taunt()
+            say(["...where's it going?", "bye-bye arrow.", "into orbit!"], by: target, chance: 0.8)
+            say(["...oops.", "it'll come down eventually."], by: r.shooter, chance: 0.5, after: 0.5)
             hold -= 0.3
+        }
+
+        if o.hitArcher == nil, skimmedOver(o.path, target: target) {
+            archers[target].relieved()
+            say(["WHOA!", "my hair!", "too close!!", "hey!!"], by: target)
+            if controller.humans.contains(target) { services.haptics.nearMiss() }
         }
 
         run(.wait(forDuration: hold + 0.35)) { [weak self] in
             guard let self else { return }
             self.clearPinned()
+            self.quips.removeAll()
             for a in self.archers { a.settle() }
             f.completion()
         }
@@ -855,6 +897,43 @@ final class MatchScene: SKScene {
         guard !reduceMotion else { return }
         node.setScale(0.3)
         node.run(.sequence([.scale(to: 1.12, duration: 0.12), .scale(to: 1, duration: 0.08)]))
+    }
+
+    // MARK: - Quips
+
+    private var quips: [Int: SKNode] = [:]
+
+    /// A hand-lettered one-liner above an archer's head, like "phew." Only
+    /// shown when that archer is on screen; one at a time each.
+    func say(_ lines: [String], by i: Int, chance: Double = 1, after delay: Double = 0, hold: Double = 1.7) {
+        guard i < archers.count, Double.random(in: 0..<1) < chance, let line = lines.randomElement() else { return }
+        run(.wait(forDuration: delay)) { [weak self] in
+            guard let self else { return }
+            let a = self.archers[i]
+            let headTop = CGPoint(x: a.position.x, y: a.position.y + 2.15 * self.archerScale)
+            guard self.cam.isVisible(world: headTop, margin: 30) else { return }
+            if let old = self.quips[i] { self.unpin(old); old.removeFromParent() }
+            let note = HUD.label(line, font: GameFont.hand, size: 22)
+            note.zRotation = CGFloat.random(in: -0.06...0.06)
+            note.zPosition = 6
+            self.hud.addChild(note)
+            self.pin(note, at: headTop, offset: CGPoint(x: 0, y: 34))
+            self.popIn(note)
+            self.quips[i] = note
+            note.run(.sequence([.wait(forDuration: hold), .fadeOut(withDuration: 0.25), .run { [weak self, weak note] in
+                guard let self, let note else { return }
+                self.unpin(note)
+                note.removeFromParent()
+                if self.quips[i] === note { self.quips[i] = nil }
+            }]))
+        }
+    }
+
+    /// Did the arrow skim just over the target's head on its way past?
+    private func skimmedOver(_ path: [Vec2], target: Int) -> Bool {
+        let feet = archers[target].position
+        let top = Double(feet.y) + 2.0 * Double(archerScale)
+        return path.contains { abs($0.x - Double(feet.x)) < 0.9 && $0.y > top && $0.y < top + 2.6 }
     }
 
     private func pin(_ node: SKNode, at world: CGPoint, offset: CGPoint = .zero) {

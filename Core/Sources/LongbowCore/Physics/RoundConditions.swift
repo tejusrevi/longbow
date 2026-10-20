@@ -10,10 +10,15 @@ public struct RoundConditions: Codable, Equatable, Sendable {
     public var gravity: Double
     public var terrain: Terrain
     public var obstacles: [Obstacle]
+    /// How far each archer has been knocked back from their starting spot
+    /// (metres, away from the other archer). Zero at the start of a round.
+    public var archerOffsets: [Double] = [0, 0]
 
     /// Feet position of archer 0 (left, facing right) and 1 (right, facing left).
+    /// Feet stand on the ground: height 0 on the starting pads.
     public func archerPosition(_ index: Int) -> Vec2 {
-        index == 0 ? Vec2(0, 0) : Vec2(distance, 0)
+        let x = index == 0 ? -archerOffsets[0] : distance + archerOffsets[1]
+        return Vec2(x, archerOffsets[index] == 0 ? 0 : terrain.height(at: x))
     }
 
     /// +1 for the left archer (shoots right), −1 for the right archer.

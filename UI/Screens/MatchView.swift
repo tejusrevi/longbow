@@ -53,7 +53,7 @@ private struct MatchHUD: View {
             VStack {
                 if let map = controller.minimap {
                     HStack(spacing: 12) {
-                        MiniMap(map: map).frame(width: 260, height: 30)
+                        MiniMap(map: map)
                         if let d = controller.flightDistance {
                             Text("\(d) m")
                                 .font(Theme.mono(14, bold: true))
@@ -245,35 +245,68 @@ private struct PauseButton: View {
     }
 }
 
-/// Thin mini-map during flight: both archers and the arrow on its arc.
+/// Thin mini-map during flight: the two archers at the two ends of the line,
+/// the path flown so far and the arrow. Distance and height share one scale,
+/// so the arc's shape and angles match the real shot; the strip is as tall as
+/// this flight needs. Everything is fixed for the whole flight.
 private struct MiniMap: View {
     let map: MatchController.Minimap
+    static let width: CGFloat = 260
+    static let inset: CGFloat = 7
+
+    /// One scale for the flight: the archers span the line.
+    private var span: (left: CGFloat, right: CGFloat, base: CGFloat, k: CGFloat) {
+        let xs = map.archers.map(\.x)
+        let left = xs.min() ?? 0, right = xs.max() ?? 1
+        let base = map.archers.map(\.y).min() ?? 0
+        return (left, right, base, (Self.width - 2 * Self.inset) / max(right - left, 1))
+    }
+
+    /// Tall enough for this flight's arc (and any dip below the archers).
+    var height: CGFloat {
+        let sp = span
+        let top = max((map.path.map(\.y).max() ?? sp.base) - sp.base, 0)
+        let dip = max(sp.base - (map.path.map(\.y).min() ?? sp.base), 0)
+        return min(80, max(30, (top + dip) * sp.k + 2 * Self.inset))
+    }
 
     var body: some View {
         Canvas { ctx, size in
-            let minY = min(0, map.path.map(\.y).min() ?? 0)
-            let maxY = max(1, map.path.map(\.y).max() ?? 1)
+            let sp = span
+            let top = max((map.path.map(\.y).max() ?? sp.base) - sp.base, 0)
+            let dip = max(sp.base - (map.path.map(\.y).min() ?? sp.base), 0)
+            // Very high lobs are the only case squeezed a little to fit.
+            let ky = min(sp.k, (size.height - 2 * Self.inset) / max(top + dip, 0.01))
+            let baseY = Self.inset + top * ky
             func pt(_ p: CGPoint) -> CGPoint {
-                CGPoint(x: (p.x / map.distance) * (size.width - 12) + 6,
-                        y: size.height - 6 - (p.y - minY) / (maxY - minY) * (size.height - 12))
+                let x = Self.inset + (p.x - sp.left) * sp.k
+                return CGPoint(x: min(max(x, 2), size.width - 2), y: baseY - (p.y - sp.base) * ky)
             }
-            var base = Path()
-            base.move(to: CGPoint(x: 0, y: size.height - 2))
-            base.addLine(to: CGPoint(x: size.width, y: size.height - 2))
-            ctx.stroke(base, with: .color(.ink), lineWidth: 2)
+
+            var line = Path()
+            line.move(to: CGPoint(x: 0, y: baseY))
+            line.addLine(to: CGPoint(x: size.width, y: baseY))
+            ctx.stroke(line, with: .color(.ink), lineWidth: 2)
+
             var flown = Path()
-            for (i, p) in map.path.prefix(map.index + 1).enumerated() {
-                i == 0 ? flown.move(to: pt(p)) : flown.addLine(to: pt(p))
+            for (i, p) in map.path.prefix(map.flown).enumerated() { i == 0 ? flown.move(to: pt(p)) : flown.addLine(to: pt(p)) }
+            flown.addLine(to: pt(map.arrow))
+            ctx.stroke(flown, with: .color(.ink), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+
+            for (i, f) in map.archers.enumerated() {
+                let c = CGPoint(x: pt(f).x, y: baseY)
+                let r = CGRect(x: c.x - 5, y: c.y - 5, width: 10, height: 10)
+                if i == map.shooter {
+                    ctx.fill(Path(ellipseIn: r), with: .color(.ink))
+                } else {
+                    ctx.fill(Path(ellipseIn: r), with: .color(.paper))
+                    ctx.stroke(Path(ellipseIn: r), with: .color(.ink), lineWidth: 2)
+                }
             }
-            ctx.stroke(flown, with: .color(.ink), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-            let a = pt(CGPoint(x: 0, y: 0)), b = pt(CGPoint(x: map.distance, y: 0))
-            ctx.fill(Path(ellipseIn: CGRect(x: a.x - 5, y: a.y - 5, width: 10, height: 10)), with: .color(.ink))
-            ctx.stroke(Path(ellipseIn: CGRect(x: b.x - 5, y: b.y - 5, width: 10, height: 10)), with: .color(.ink), lineWidth: 2)
-            if map.index < map.path.count {
-                let c = pt(map.path[map.index])
-                ctx.fill(Path(ellipseIn: CGRect(x: c.x - 6, y: c.y - 6, width: 12, height: 12)), with: .color(.ink))
-            }
+            let a = pt(map.arrow)
+            ctx.fill(Path(ellipseIn: CGRect(x: a.x - 6, y: a.y - 6, width: 12, height: 12)), with: .color(.ink))
         }
+        .frame(width: Self.width, height: height)
         .accessibilityHidden(true)
     }
 }
@@ -307,7 +340,7 @@ private struct PauseMenu: View {
                     Button("RESUME") { controller.paused = false }
                         .buttonStyle(PillButtonStyle(primary: true))
                     HStack(spacing: 14) {
-                        Button(settings.soundOn ? "SOUND ON" : "SOUND OFF") { settings.soundOn.toggle() }
+                        Button(settings.soundOn ? "SOUND: ON" : "SOUND: OFF") { settings.soundOn.toggle() }
                             .buttonStyle(PillButtonStyle(primary: false))
                         Button("QUIT") { confirmQuit = true }
                             .buttonStyle(PillButtonStyle(primary: false))

@@ -44,10 +44,21 @@ final class MatchController: ObservableObject {
         let subtitle: String?
     }
 
+    /// Everything the flight mini-map draws, in world metres (y up), so it can
+    /// be drawn at one true scale: same arc, same angles as the real flight.
     struct Minimap: Equatable {
-        let distance: Double
+        /// The whole flight path, thinned.
         let path: [CGPoint]
-        let index: Int
+        /// The arrow right now, and its direction of travel (radians).
+        let arrow: CGPoint
+        let heading: CGFloat
+        /// How much of `path` has been flown.
+        let flown: Int
+        let ground: [CGPoint]
+        /// Feet of archer 0 and 1, and how tall they stand.
+        let archers: [CGPoint]
+        let archerHeight: CGFloat
+        let shooter: Int
     }
 
     @Published private(set) var phase: Phase = .intro
@@ -122,14 +133,16 @@ final class MatchController: ObservableObject {
         self.services = services
         let config = services.config
         var game = config.game
-        game.rules.roundsToWin = mode == .vsAI(.easy) ? game.rules.roundsToWinEasyAI : game.rules.roundsToWin
+        // Every difficulty is first to the same number of rounds; what changes is
+        // how hard each hit is (wind, knockback, aim guide) and the AI's skill.
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-oneHitKills") {
             game.damage.head = 100; game.damage.body = 100; game.damage.legs = 100
         }
         #endif
         let setup = MatchSetup(seed: seed, arena: .hills, roundsToWin: game.rules.roundsToWin,
-                               firstShooter: MatchSetup.tossWinner(seed: seed))
+                               firstShooter: MatchSetup.tossWinner(seed: seed),
+                               challenge: HitChallenge(rawValue: difficulty.rawValue) ?? .medium)
         engine = MatchEngine(setup: setup, config: game)
         ai = AIPlayer(difficulty: difficulty, seed: seed &+ 0xA1)
         #if DEBUG
@@ -242,9 +255,17 @@ final class MatchController: ObservableObject {
         engine.preview(input)
     }
 
+    /// How much of the trajectory the aim guide shows this match.
+    var aimGuidePercent: Double { engine.state.setup.challenge.aimGuidePercent }
+
+    /// The field as it was when the arrow left the bow (archers may be
+    /// knocked back once it lands).
+    private var flightConditions: RoundConditions?
+
     private func submit(_ input: ShotInput) {
         guard !finished, engine.state.phase == .awaitingShot else { return }
         let shooter = engine.state.currentShooter
+        flightConditions = engine.state.conditions
         // Brace arrives in Milestone 3; until then every hit lands in full.
         let report = engine.submit(input, braceMultiplier: 1)
         if shooter == 1 { ai.observe(report) } else { autoplayAI?.observe(report) }
@@ -300,20 +321,26 @@ final class MatchController: ObservableObject {
         withAnimation(.easeOut(duration: 0.5)) { health = h }
     }
 
-    func updateFlight(path: [Vec2], index: Int, distance: Double) {
-        let pts = stride(from: 0, to: path.count, by: max(1, path.count / 60)).map { CGPoint(x: path[$0].x, y: path[$0].y) }
-        minimap = Minimap(distance: engine.state.conditions.distance, path: pts,
-                          index: min(pts.count - 1, index / max(1, path.count / 60)))
+    func updateFlight(path: [Vec2], index: Int, position: Vec2, heading: Double, distance: Double, shooter: Int) {
+        let step = max(1, path.count / 90)
+        var pts = stride(from: 0, to: path.count, by: step).map { CGPoint(x: path[$0].x, y: path[$0].y) }
+        if let last = path.last { pts.append(CGPoint(x: last.x, y: last.y)) }
+        let c = flightConditions ?? engine.state.conditions
+        let feet = [c.archerPosition(0), c.archerPosition(1)].map { CGPoint(x: $0.x, y: $0.y) }
+        minimap = Minimap(path: pts, arrow: CGPoint(x: position.x, y: position.y), heading: CGFloat(heading),
+                          flown: min(pts.count, index / step + 1), ground: [], archers: feet,
+                          archerHeight: CGFloat(1.95 * config.game.physics.archerScale), shooter: shooter)
         flightDistance = Int(distance.rounded())
     }
 
     private func afterShot(_ report: TurnReport) {
+        scene.updateConditions(engine.state.conditions)
         minimap = nil
         flightDistance = nil
         health = engine.state.health
         guard let event = report.events.last else { return }
         switch event {
-        case .windChanged:
+        case .windChanged, .knockedBack:
             break // always followed by .nextTurn
         case .nextTurn:
             phase = .presenting
@@ -379,7 +406,13 @@ final class MatchController: ObservableObject {
             scene.autoShot()
         } else if Int(t * 10) != Int(timeLeft! * 10) {
             // Feel the last five seconds tick away.
-            if t <= 5, Int(t.rounded(.up)) != Int(timeLeft!.rounded(.up)) { services.haptics.timerTick() }
+            if t <= 5, Int(t.rounded(.up)) != Int(timeLeft!.rounded(.up)) {
+                services.haptics.timerTick()
+                if Int(t.rounded(.up)) == 5 {
+                    scene.say(["any day now...", "zzz...", "today, please.", "I'm growing a beard here."],
+                              by: 1 - engine.state.currentShooter, chance: 0.8, hold: 2.2)
+                }
+            }
             // Publish at 10 Hz; the ring doesn't need more.
             timeLeft = t
         }

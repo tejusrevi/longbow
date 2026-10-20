@@ -41,8 +41,10 @@ final class ArcherNode: SKNode {
     private let stuckLayer = SKNode()
     private var stuck: [SKNode] = []
 
-    static let shoulder = CGPoint(x: 0.06, y: 1.42)
-    static let backShoulder = CGPoint(x: -0.06, y: 1.42)
+    /// Shoulders sit at the top corners of the torso, below the chin, so the
+    /// arms never start inside the (enlarged) head.
+    static let shoulder = CGPoint(x: 0.1, y: 1.3)
+    static let backShoulder = CGPoint(x: -0.1, y: 1.3)
     static let neck = CGPoint(x: 0.02, y: 1.45)
     static let armLength: CGFloat = 0.42
     /// Relaxed pose: arm hanging down, bow held along it like a walking stick.
@@ -53,6 +55,8 @@ final class ArcherNode: SKNode {
     private(set) var angleDegrees: CGFloat = -55
     private(set) var power: CGFloat = 0
     private(set) var expression: Expression = .neutral
+    /// The resting face. Matches use `.angry`: everyone means business.
+    private(set) var calmExpression: Expression = .neutral
     private var stringPluck: CGFloat = 0
 
     init(look: ArcherLook, facing: CGFloat, boil: Bool, lively: Bool = true, hat: Hat = .none, avatar: Avatar? = nil) {
@@ -99,8 +103,9 @@ final class ArcherNode: SKNode {
 
         backArm.zPosition = 0
         body.zPosition = 2
+        // The bow arm passes behind the head, so the face is never covered.
+        bowArm.zPosition = 2.5
         headPivot.zPosition = 3
-        bowArm.zPosition = 4
         stuckLayer.zPosition = 5
         upperContent.addChild(backArm)
         upperContent.addChild(body)
@@ -162,14 +167,14 @@ final class ArcherNode: SKNode {
     }
 
     private func blinkOnce() {
-        guard expression == .neutral, power == 0 else { return }
+        guard expression == calmExpression, power == 0 else { return }
         if look.hasBlink {
             let lib = ArtLibrary.shared
             head.removeAction(forKey: "boil")
             head.texture = lib.head(avatar, .blink).textures[0]
             run(.wait(forDuration: 0.13)) { [weak self] in
-                guard let self, self.expression == .neutral else { return }
-                self.head.startBoil(lib.head(self.avatar, .neutral).textures, enabled: self.boil)
+                guard let self, self.expression == self.calmExpression else { return }
+                self.head.startBoil(lib.head(self.avatar, self.calmExpression).textures, enabled: self.boil)
             }
         }
         // Every so often, a little head tilt instead of (or as well as) a blink.
@@ -230,11 +235,14 @@ final class ArcherNode: SKNode {
         nocked.position = CGPoint(x: pullX, y: 0)
 
         // Back arm reaches the string's pull point (or hangs loose at rest).
-        let pull = string.isHidden ? CGPoint(x: -0.1, y: 1.0)
+        let pull = string.isHidden ? CGPoint(x: -0.13, y: 0.92)
             : bowArm.convert(CGPoint(x: pullX, y: 0), to: upperContent)
         let b = CGMutablePath()
         b.move(to: Self.backShoulder)
-        let elbow = CGPoint(x: (Self.backShoulder.x + pull.x) / 2 - 0.05, y: (Self.backShoulder.y + pull.y) / 2 - 0.1)
+        // Drawing the string, the elbow cocks out behind, level with the hand.
+        let elbow = string.isHidden
+            ? CGPoint(x: Self.backShoulder.x - 0.05, y: (Self.backShoulder.y + pull.y) / 2)
+            : CGPoint(x: min(Self.backShoulder.x, pull.x) - 0.16, y: pull.y + 0.03)
         b.addQuadCurve(to: pull, control: elbow)
         backArm.metresPath = b
     }
@@ -306,7 +314,16 @@ final class ArcherNode: SKNode {
 
     // MARK: - Expressions and reactions
 
-    func setExpression(_ expr: Expression) {
+    /// Sets the face to rest in (`.neutral` maps to it from then on).
+    func setCalmExpression(_ expr: Expression) {
+        calmExpression = expr
+        let current = expression
+        expression = .blink // force a refresh
+        setExpression(current == .neutral ? expr : current)
+    }
+
+    func setExpression(_ requested: Expression) {
+        let expr = requested == .neutral ? calmExpression : requested
         guard expr != expression else { return }
         expression = expr
         head.startBoil(ArtLibrary.shared.head(avatar, expr).textures, enabled: boil)
@@ -422,6 +439,27 @@ final class ArcherNode: SKNode {
             node.zRotation = -self.facing * 7 * k
         }
         flying.run(.sequence([fall, .fadeOut(withDuration: 0.25), .removeFromParent()]))
+    }
+
+    /// Knocked back by a hit: three stumbling hops away from the shooter,
+    /// following the ground, arms flailing a little.
+    func stagger(to target: CGPoint, ground: @escaping (CGFloat) -> CGFloat, delay: Double) {
+        let start = position
+        let hops = 3
+        let duration = 0.75
+        let move = SKAction.customAction(withDuration: duration) { node, t in
+            let k = min(1, t / CGFloat(duration))
+            let ease = 1 - (1 - k) * (1 - k)
+            let x = start.x + (target.x - start.x) * ease
+            let phase = (k * CGFloat(hops)).truncatingRemainder(dividingBy: 1)
+            let hop = 0.28 * (1 - k * 0.6) * sin(phase * .pi)
+            node.position = CGPoint(x: x, y: ground(x) + hop)
+        }
+        let wobble = SKAction.sequence([.rotate(toAngle: 0.18 * facing, duration: 0.12),
+                                        .rotate(toAngle: -0.1 * facing, duration: 0.25),
+                                        .rotate(toAngle: 0, duration: 0.3)])
+        run(.sequence([.wait(forDuration: delay), .group([move, .run { [weak self] in self?.rig.run(wobble) }]),
+                       .run { [weak self] in self?.position = target }]), withKey: "stagger")
     }
 
     /// Phew: lean away, sweat, and a big exhale.

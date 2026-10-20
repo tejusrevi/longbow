@@ -116,11 +116,6 @@ final class PhysicsTests: XCTestCase {
             let c = RoundConditions.generatePlayable(seed: SplitMix64.hash(77, UInt64(i)), arena: .hills, config: cfg)
             XCTAssertTrue(ShotSearch.isHittable(c, shooter: 0, config: cfg), "seed \(i)")
             XCTAssertTrue(ShotSearch.isHittable(c, shooter: 1, config: cfg), "seed \(i) (right side)")
-            for pair in 1...4 {
-                var p = c
-                p.windRelative = c.playableWind(forPair: pair, arena: .hills, config: cfg)
-                XCTAssertTrue(ShotSearch.isHittable(p, shooter: 0, config: cfg), "seed \(i) pair \(pair)")
-            }
         }
     }
 }

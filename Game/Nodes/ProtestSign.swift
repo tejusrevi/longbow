@@ -8,9 +8,9 @@ import UIKit
 @MainActor
 final class ProtestSign: SKNode {
     static let slogans = [
-        "Make Cluck, Not War", "Fowl Play!", "Cluck Around, Find Out", "Don’t Be Fowl",
+        "Fowl Play!", "Cluck Around, Find Out", "Don't Be Fowl", "What the Cluck?!", "Eggs Marks the Spot", "Peck-tacularly Bad Aim", "Chicken Tikka Miss",
         "Chickens Against Archery", "Stop Shooting Poultry", "Hit Targets, Not Chickens",
-        "This Is Eggregious", "Henough Is Henough!", "I Demand Egguality",
+        "This Is Eggregious", "Henough Is Henough!", "Eggs-cuse Me?!", "Hen in the Crossfire", "Bawk to the Future", "Just Wing It, Bro", "Eggs-cellent Aim, Buddy"
     ]
     private static var recent: [String] = []
 

@@ -17,6 +17,8 @@ enum Expression: String, CaseIterable {
     case neutral, focused, hit, relieved, victorious, defeated
     /// Eyes shut for a blink (idle life).
     case blink
+    /// Game face: brows down, glaring, scowling (everyone, during matches).
+    case angry
 }
 
 /// Code-drawn character parts, in metres relative to the feet, facing right.

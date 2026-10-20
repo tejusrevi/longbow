@@ -8,12 +8,16 @@ public struct MatchSetup: Codable, Equatable, Sendable {
     public var roundsToWin: Int
     /// Decided by the toss (index 0 or 1).
     public var firstShooter: Int
+    /// How hard each hit is (wind, knockback).
+    public var challenge: HitChallenge
 
-    public init(seed: UInt64, arena: ArenaProfile.ID, roundsToWin: Int, firstShooter: Int) {
+    public init(seed: UInt64, arena: ArenaProfile.ID, roundsToWin: Int, firstShooter: Int,
+                challenge: HitChallenge = .medium) {
         self.seed = seed
         self.arena = arena
         self.roundsToWin = roundsToWin
         self.firstShooter = firstShooter
+        self.challenge = challenge
     }
 
     /// The toss result for a seed (A6.9): shared by client and server.
@@ -52,6 +56,10 @@ public struct MatchState: Codable, Equatable, Sendable {
     /// Sudden-death results of the current pair: miss distance (0 = hit) and damage.
     public var suddenDeathShots: [SuddenDeathShot?] = [nil, nil]
     public var conditions: RoundConditions
+    /// The wind in world terms (positive blows toward archer 1). Its direction
+    /// is fixed for the whole match; its strength changes only after an arrow
+    /// strikes an archer. Both players shoot in exactly this wind.
+    public var windWorld: Double = 0
     /// Per-player stats for the result screen.
     public var hitsLanded = [0, 0]
     public var headshots = [0, 0]
@@ -76,8 +84,11 @@ public struct TurnReport: Codable, Equatable, Sendable {
     public enum Event: Codable, Equatable, Sendable {
         /// Play continues; `lastBreath` = the next shooter replies at 0 health.
         case nextTurn(shooter: Int, lastBreath: Bool)
-        /// A new pair of shots starts with a new wind (relative to the shooter).
+        /// The wind's strength changed after a strike (world terms, same direction).
         case windChanged(Double)
+        /// A hit knocked an archer back; `offset` is their new distance from
+        /// their starting spot.
+        case knockedBack(archer: Int, offset: Double)
         case suddenDeath(pair: Int)
         case roundOver(winner: Int, reason: RoundEndReason)
         case matchOver(winner: Int)
@@ -114,6 +125,75 @@ public struct MatchEngine: Sendable {
             currentShooter: setup.firstShooter,
             conditions: .generatePlayable(seed: seed, arena: arena, config: config)
         )
+        // One direction for the whole match, picked by the seed.
+        let sign: Double = SplitMix64.hash(setup.seed, 0x5141D) & 1 == 0 ? 1 : -1
+        state.windWorld = fittedWind(scaledWind(sign * abs(state.conditions.windRelative)))
+        syncWind()
+    }
+
+    // MARK: Wind
+
+    /// Points the shared world wind at the current shooter (the simulator
+    /// takes wind relative to whoever is shooting).
+    private mutating func syncWind() {
+        state.conditions.windRelative = state.windWorld * RoundConditions.facing(state.currentShooter)
+    }
+
+    /// True when both archers can still hit each other in this world wind.
+    private func windAllowsHits(_ world: Double) -> Bool {
+        var c = state.conditions
+        for shooter in [0, 1] {
+            c.windRelative = world * RoundConditions.facing(shooter)
+            if !ShotSearch.isHittable(c, shooter: shooter, config: config) { return false }
+        }
+        return true
+    }
+
+    /// The strongest wind up to `world` (same direction) that keeps the round fair.
+    private func fittedWind(_ world: Double) -> Double {
+        var w = world
+        while w != 0 && !windAllowsHits(w) { w = w > 0 ? max(0, w - 0.5) : min(0, w + 0.5) }
+        return w
+    }
+
+    /// The arena's wind, scaled by the challenge, on the 0.5 m/s² grid.
+    private func scaledWind(_ w: Double) -> Double {
+        (w * state.setup.challenge.windScale * 2).rounded() / 2
+    }
+
+    /// After a hit: the target is shoved back from where they stood. Eased if
+    /// it would leave either archer without a possible hit.
+    private mutating func knockBack(_ victim: Int) -> Double? {
+        let ch = state.setup.challenge
+        var rng = SplitMix64(seed: SplitMix64.hash(state.setup.seed, 0xB0B0, UInt64(state.turn)))
+        let old = state.conditions.archerOffsets[victim]
+        var push = Double(rng.nextInt(in: ch.knockbackTenths)) / 10
+        push = min(push, ch.maxKnockback - old)
+        while push >= 0.5 {
+            state.conditions.archerOffsets[victim] = old + push
+            if windAllowsHits(state.windWorld) || windAllowsHits(0) { break }
+            push -= 0.5
+        }
+        if push < 0.5 { state.conditions.archerOffsets[victim] = old; return nil }
+        state.windWorld = fittedWind(state.windWorld)
+        return old + push
+    }
+
+    /// After a strike: a new strength, same direction.
+    private mutating func shiftWindAfterStrike() -> Double? {
+        let arena = ArenaProfile.profile(for: state.setup.arena)
+        var rng = SplitMix64(seed: SplitMix64.hash(state.setup.seed, 0x5711CE, UInt64(state.turn)))
+        let sign: Double = state.windWorld < 0 ? -1 : (state.windWorld > 0 ? 1 :
+            (SplitMix64.hash(state.setup.seed, 0x5141D) & 1 == 0 ? 1 : -1))
+        let current = abs(state.windWorld)
+        let lo = Int((arena.minWind * state.setup.challenge.windScale * 2).rounded())
+        let hi = Int((arena.maxWind * state.setup.challenge.windScale * 2).rounded())
+        let steps = Array(lo...max(lo, hi)).map { Double($0) * 0.5 }.filter { $0 != current }
+        guard !steps.isEmpty else { return nil }
+        let next = fittedWind(sign * steps[rng.nextInt(in: 0...(steps.count - 1))])
+        guard next != state.windWorld else { return nil }
+        state.windWorld = next
+        return next
     }
 
     public static func baseDamage(_ part: BodyPart, _ cfg: DamageConfig) -> Int {
@@ -172,6 +252,14 @@ public struct MatchEngine: Sendable {
         } else {
             events = resolveNormal(shooter: shooter)
         }
+        // A strike knocks the target back and changes the wind's strength.
+        if let victim = outcome.hitArcher, state.suddenDeath == 0, case .awaitingShot = state.phase, events.contains(where: {
+            if case .nextTurn = $0 { return true }; return false
+        }) {
+            if let w = shiftWindAfterStrike() { events.insert(.windChanged(w), at: 0) }
+            if let off = knockBack(victim) { events.insert(.knockedBack(archer: victim, offset: off), at: 0) }
+        }
+        syncWind()
         if case let .roundOver(winner, _)? = events.last {
             state.roundsWon[winner] += 1
             if state.roundsWon[winner] >= state.setup.roundsToWin {
@@ -213,16 +301,8 @@ public struct MatchEngine: Sendable {
             return [.roundOver(winner: winner, reason: .turnLimit)]
         }
         state.currentShooter = first
-        // New pair, new wind.
         state.pair += 1
-        let wind = state.conditions.driftedWind(from: state.conditions.windRelative, pair: state.pair,
-                                                arena: ArenaProfile.profile(for: state.setup.arena), config: config)
-        var events: [TurnReport.Event] = []
-        if wind != state.conditions.windRelative {
-            state.conditions.windRelative = wind
-            events.append(.windChanged(wind))
-        }
-        return events + [.nextTurn(shooter: first, lastBreath: false)]
+        return [.nextTurn(shooter: first, lastBreath: false)]
     }
 
     private mutating func startSuddenDeath() -> [TurnReport.Event] {
@@ -234,6 +314,8 @@ public struct MatchEngine: Sendable {
         state.conditions = .generatePlayable(seed: seed, arena: ArenaProfile.profile(for: state.setup.arena),
                                              config: config)
         state.currentShooter = state.roundFirstShooter
+        state.windWorld = fittedWind(state.windWorld)
+        syncWind()
         return [.suddenDeath(pair: state.suddenDeath)]
     }
 
@@ -270,6 +352,9 @@ public struct MatchEngine: Sendable {
         let seed = RoundConditions.roundSeed(matchSeed: state.setup.seed, round: state.round)
         state.conditions = .generatePlayable(seed: seed, arena: ArenaProfile.profile(for: state.setup.arena),
                                              config: config)
+        // Same wind carries over; eased only if the new ground makes it unfair.
+        state.windWorld = fittedWind(state.windWorld)
+        syncWind()
         state.phase = .awaitingShot
     }
 

@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": ["es2015"],
+    "module": "none",
+    "outFile": "build/core.js",
+    "strict": true,
+    "noUnusedLocals": false,
+    "removeComments": false
+  },
+  "files": ["src/rng.ts", "src/physics.ts", "src/main.ts"]
+}

@@ -278,9 +278,13 @@ extension AIDifficulty {
         }
     }
 
+    /// What makes each hit harder at this level.
     func blurb(config: RulesConfig) -> String {
-        let rounds = self == .easy ? config.roundsToWinEasyAI : config.roundsToWin
-        return "first to \(rounds)"
+        switch self {
+        case .easy: return "light wind · small stagger"
+        case .medium: return "wind · hits knock back"
+        case .hard: return "strong wind · big knockback · no aim guide"
+        }
     }
 }
 
