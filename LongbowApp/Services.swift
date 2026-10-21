@@ -46,10 +46,14 @@ final class Services {
     }
 
     var config: AppConfig { remoteConfig.config }
+
+    /// The app's one container. The environment default points here too, so
+    /// nothing builds a second set of services (and audio players) at launch.
+    static let shared = Services.live()
 }
 
 private struct ServicesKey: EnvironmentKey {
-    static let defaultValue: Services = .live()
+    static let defaultValue: Services = .shared
 }
 
 extension EnvironmentValues {

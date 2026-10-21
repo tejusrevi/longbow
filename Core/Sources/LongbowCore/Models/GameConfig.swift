@@ -30,7 +30,7 @@ public struct PhysicsConfig: Codable, Equatable, Sendable {
     public var boundsBottom: Double = -20
     /// Size of the archers relative to the A6.4 hitboxes (1.0). Bigger archers are
     /// easier to hit; the art scales with it.
-    public var archerScale: Double = 1.8
+    public var archerScale: Double = 2.0
     /// Where the arrow leaves the bow, relative to the shooter's feet (x is along
     /// facing), at archer scale 1.
     public var launchOffsetX: Double = 0.35

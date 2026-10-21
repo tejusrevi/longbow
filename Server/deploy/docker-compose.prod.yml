@@ -1,0 +1,79 @@
+# Production server: Nakama + Postgres behind Caddy (HTTPS), on one small
+# VM (1 GB RAM + swap). Deployed by deploy.sh; secrets come from .env next
+# to this file on the server (never committed).
+#   API + socket:  https://$DOMAIN  (Caddy -> nakama:7350)
+#   Console:       ssh -L 7351:127.0.0.1:7351 longbow@$DOMAIN, then http://127.0.0.1:7351
+services:
+  postgres:
+    image: postgres:16.15-alpine
+    restart: unless-stopped
+    command: >
+      postgres
+      -c shared_buffers=64MB
+      -c max_connections=40
+      -c work_mem=4MB
+      -c effective_cache_size=256MB
+    environment:
+      POSTGRES_DB: nakama
+      POSTGRES_USER: nakama
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nakama"]
+      interval: 5s
+      retries: 30
+
+  nakama:
+    image: heroiclabs/nakama:3.41.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - >
+        /nakama/nakama migrate up --database.address nakama:${POSTGRES_PASSWORD}@postgres:5432/nakama &&
+        exec /nakama/nakama
+        --name longbow
+        --database.address nakama:${POSTGRES_PASSWORD}@postgres:5432/nakama
+        --database.max_open_conns 20
+        --logger.level INFO
+        --socket.server_key ${NAKAMA_SERVER_KEY:?set in .env}
+        --runtime.http_key ${NAKAMA_HTTP_KEY:?set in .env}
+        --console.username longbow-admin
+        --console.password ${NAKAMA_CONSOLE_PASSWORD:?set in .env}
+        --console.signing_key ${NAKAMA_CONSOLE_SIGNING_KEY:?set in .env}
+        --session.encryption_key ${NAKAMA_SESSION_KEY:?set in .env}
+        --session.refresh_encryption_key ${NAKAMA_REFRESH_KEY:?set in .env}
+        --runtime.js_entrypoint index.js
+    volumes:
+      - ./modules:/nakama/data/modules:ro
+    # Only Caddy talks to the API from outside; the console stays on localhost.
+    ports:
+      - "127.0.0.1:7350:7350"
+      - "127.0.0.1:7351:7351"
+    healthcheck:
+      test: ["CMD", "/nakama/nakama", "healthcheck"]
+      interval: 10s
+      retries: 20
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    depends_on: [nakama]
+    environment:
+      DOMAIN: ${DOMAIN:?set in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

@@ -7,10 +7,12 @@ import UIKit
 /// words stay readable.
 @MainActor
 final class ProtestSign: SKNode {
+    /// Every sign is the chickens heckling a missed shot.
     static let slogans = [
-        "Fowl Play!", "Cluck Around, Find Out", "Don't Be Fowl", "What the Cluck?!", "Eggs Marks the Spot", "Peck-tacularly Bad Aim", "Chicken Tikka Miss",
-        "Chickens Against Archery", "Stop Shooting Poultry", "Hit Targets, Not Chickens",
-        "This Is Eggregious", "Henough Is Henough!", "Eggs-cuse Me?!", "Hen in the Crossfire", "Bawk to the Future", "Just Wing It, Bro", "Eggs-cellent Aim, Buddy"
+        "Nice Miss!", "You Call That Aim?", "We Didn't Even Flinch", "0/10 Aim",
+        "Even Chickens Aim Better", "That Was Eggs-tra Bad", "Try Aiming Next Time", "Miss-tacular!",
+        "Peck-tacularly Bad Aim", "Eggs-cellent Aim, Buddy", "Just Wing It, Bro",
+        "What the Cluck?!",
     ]
     private static var recent: [String] = []
 

@@ -23,7 +23,7 @@ targets:
       - UI
       - Services
       - path: Resources
-        excludes: ["Fonts/README.md", "Fonts/*.txt"]
+        excludes: ["Fonts/README.md", "Fonts/*.txt", "Music/README.md"]
     dependencies:
       - package: LongbowCore
     info:
@@ -34,6 +34,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen:
           UIColorName: Paper
+          UIImageName: LaunchWall
+          UIImageRespectsSafeAreaInsets: false
         UIRequiresFullScreen: true
         UIStatusBarHidden: true
         UIViewControllerBasedStatusBarAppearance: false
@@ -48,15 +50,15 @@ targets:
           - ShantellSans-Bold.ttf
           - LuckiestGuy-Regular.ttf
         ITSAppUsesNonExemptEncryption: false
-        # Development game server (Server/ on the Mac, over the local network).
-        # Change to the hosted server's address once it's online.
-        LongbowServerHost: "10.0.0.101"
-        LongbowServerKey: "longbow-local-key"
-        NSLocalNetworkUsageDescription: Longbow connects to the game server on your network for friend duels.
+        # The hosted game server (Server/deploy), HTTPS only. The server key is
+        # a client key, built into every copy of the app; it isn't a secret.
+        LongbowServerHost: "longbow-duel.canadacentral.cloudapp.azure.com"
+        LongbowServerKey: "lb-c2aacb958dc03c6861061e92"
+        NSLocalNetworkUsageDescription: Longbow can connect to a game server on your network for testing.
         NSAppTransportSecurity:
-          # Development server only: plain HTTP on the local network. The hosted
-          # server will use HTTPS and this exception goes away.
-          NSAllowsArbitraryLoads: true
+          # Lets debug builds reach a dev server on the Mac (-serverHost). The
+          # hosted server is HTTPS and needs no exception.
+          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tejusrevi.longbow

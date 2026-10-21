@@ -85,7 +85,7 @@ struct TossView: View {
         let s = TossScene(size: size, boil: !reduceMotion, fast: reduceMotion, avatars: avatars, hats: hats,
                           winner: tossWinner)
         s.onLook = {
-            services.audio.play(.tossSpin, volume: 0.4)
+            services.audio.play(.cluck, volume: 0.5)
             services.haptics.selection()
         }
         s.onDecided = {

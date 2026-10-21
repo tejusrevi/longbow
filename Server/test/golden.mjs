@@ -18,15 +18,13 @@ function bits(x) {
 let results;
 if (process.argv.includes("--nakama")) {
   const base = "http://127.0.0.1:7350";
-  const auth = await fetch(base + "/v2/account/authenticate/device?create=true", {
-    method: "POST", headers: { Authorization: "Basic " + btoa("longbow-local-key:"), "Content-Type": "application/json" },
-    body: JSON.stringify({ id: "golden-test-device-0001" }),
-  }).then((r) => r.json());
+  // simulate_shots is server-to-server only: call it with the runtime http_key.
+  const httpKey = process.env.NAKAMA_HTTP_KEY || "longbow-local-http";
   // Small batches: the HTTP gateway caps request size.
   results = [];
   for (let i = 0; i < reqs.length; i += 40) {
-    const res = await fetch(base + "/v2/rpc/simulate_shots", {
-      method: "POST", headers: { Authorization: "Bearer " + auth.token, "Content-Type": "application/json" },
+    const res = await fetch(base + "/v2/rpc/simulate_shots?http_key=" + encodeURIComponent(httpKey), {
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(JSON.stringify(reqs.slice(i, i + 40))),
     }).then((r) => r.json());
     if (!res.payload) { console.error(res); process.exit(1); }

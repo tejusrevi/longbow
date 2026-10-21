@@ -23,16 +23,16 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LongbowServerHost</key>
-	<string>10.0.0.101</string>
+	<string>longbow-duel.canadacentral.cloudapp.azure.com</string>
 	<key>LongbowServerKey</key>
-	<string>longbow-local-key</string>
+	<string>lb-c2aacb958dc03c6861061e92</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoads</key>
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Longbow connects to the game server on your network for friend duels.</string>
+	<string>Longbow can connect to a game server on your network for testing.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>ArchivoBlack-Regular.ttf</string>
@@ -46,6 +46,10 @@
 	<dict>
 		<key>UIColorName</key>
 		<string>Paper</string>
+		<key>UIImageName</key>
+		<string>LaunchWall</string>
+		<key>UIImageRespectsSafeAreaInsets</key>
+		<false/>
 	</dict>
 	<key>UIRequiresFullScreen</key>
 	<true/>

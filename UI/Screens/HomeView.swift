@@ -93,7 +93,7 @@ struct HomeView: View {
                 s.onChickenPoked = { haptics.flutter() }
                 scene = s
             }
-            services.audio.startMusic()
+            services.audio.playMusic(.menu)
         }
         .task { await ArtLibrary.shared.prewarm(avatar: progress.avatar, hat: progress.equippedHat) }
         .onChange(of: progress.equippedHat) { _, hat in scene?.setHat(hat) }
@@ -208,21 +208,31 @@ struct DifficultySheet: View {
                     BackButton(action: onClose)
                     Text("VS GUS").font(Theme.display(34)).accessibilityAddTraits(.isHeader)
                 }
-                HStack(spacing: 14) {
+                HStack(alignment: .top, spacing: 14) {
                     ForEach(AIDifficulty.allCases, id: \.self) { d in
+                        let primary = d == .medium
                         Button {
                             services.haptics.selection()
                             services.audio.play(.click)
                             onPick(d)
                         } label: {
-                            VStack(spacing: 4) {
-                                Text(d.title)
-                                Text(d.blurb(config: services.config.game.rules))
-                                    .font(Theme.mono(12, relativeTo: .caption))
-                                    .tracking(0)
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(d.title).font(Theme.display(22)).tracking(2)
+                                ForEach(d.details, id: \.self) { line in
+                                    Text(line).font(Theme.mono(12)).fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer(minLength: 0)
+                                Text("first to \(services.config.game.rules.roundsToWin)").font(Theme.hand(15)).opacity(0.8)
                             }
+                            .foregroundStyle(primary ? Color.paper : Color.ink)
+                            .padding(16)
+                            .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+                            .background(RoundedRectangle(cornerRadius: 22).fill(primary ? Color.ink : Color.paper))
+                            .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Color.ink, lineWidth: Theme.line))
+                            .contentShape(RoundedRectangle(cornerRadius: 22))
                         }
-                        .buttonStyle(PillButtonStyle(primary: d == .medium))
+                        .buttonStyle(.plain)
+                        .accessibilityElement(children: .combine)
                     }
                 }
             }
@@ -278,14 +288,16 @@ extension AIDifficulty {
         }
     }
 
-    /// What makes each hit harder at this level.
-    func blurb(config: RulesConfig) -> String {
+    /// What makes each hit harder at this level, one short line each.
+    var details: [String] {
         switch self {
-        case .easy: return "light wind · small stagger"
-        case .medium: return "wind · hits knock back"
-        case .hard: return "strong wind · big knockback · no aim guide"
+        case .easy: return ["light wind", "small knockback", "long aim guide"]
+        case .medium: return ["steady wind", "hits knock back", "short aim guide"]
+        case .hard: return ["strong wind", "big knockback", "no aim guide"]
         }
     }
+
+    func blurb(config: RulesConfig) -> String { details.joined(separator: " · ") }
 }
 
 struct NoticeCard: View {

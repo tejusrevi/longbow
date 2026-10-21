@@ -15,30 +15,42 @@ final class NakamaClient {
 
     let host: String
     let port: Int
+    /// HTTPS + secure WebSocket (the hosted server); plain only for a dev server.
+    let secure: Bool
     private let serverKey: String
     private var token: String?
     private var tokenExpiry = Date.distantPast
     private(set) var userId: String?
     private let log = Logger(subsystem: "com.tejusrevi.longbow", category: "online")
 
-    init(host: String, port: Int = 7350, serverKey: String) {
+    init(host: String, port: Int, secure: Bool, serverKey: String) {
         self.host = host
         self.port = port
+        self.secure = secure
         self.serverKey = serverKey
     }
 
-    /// The server address from Info.plist (`LongbowServerHost`), overridable
-    /// with `-serverHost` in debug builds.
+    /// The hosted server from Info.plist (`LongbowServerHost`, HTTPS on 443).
+    /// Debug builds can use a dev server on the Mac instead:
+    /// `-serverHost 10.0.0.101` (plain HTTP on 7350, key `longbow-local-key`).
     static func live() -> NakamaClient {
-        var host = Bundle.main.object(forInfoDictionaryKey: "LongbowServerHost") as? String ?? "127.0.0.1"
+        let host = Bundle.main.object(forInfoDictionaryKey: "LongbowServerHost") as? String ?? "127.0.0.1"
         let key = Bundle.main.object(forInfoDictionaryKey: "LongbowServerKey") as? String ?? "longbow-local-key"
         #if DEBUG
-        if let h = UserDefaults.standard.string(forKey: "serverHost") { host = h }
+        if let dev = UserDefaults.standard.string(forKey: "serverHost") {
+            return NakamaClient(host: dev, port: 7350, secure: false,
+                                serverKey: UserDefaults.standard.string(forKey: "serverKey") ?? "longbow-local-key")
+        }
         #endif
-        return NakamaClient(host: host, serverKey: key)
+        return NakamaClient(host: host, port: 443, secure: true, serverKey: key)
     }
 
-    private var base: URL { URL(string: "http://\(host):\(port)")! }
+    private var base: URL {
+        var c = URLComponents()
+        c.scheme = secure ? "https" : "http"; c.host = host
+        if port != (secure ? 443 : 80) { c.port = port }
+        return c.url!
+    }
 
     // MARK: Sign-in
 
@@ -104,7 +116,8 @@ final class NakamaClient {
     func openSocket() async throws -> RealtimeSocket {
         let t = try await session()
         var comps = URLComponents()
-        comps.scheme = "ws"; comps.host = host; comps.port = port; comps.path = "/ws"
+        comps.scheme = secure ? "wss" : "ws"; comps.host = host; comps.path = "/ws"
+        if port != (secure ? 443 : 80) { comps.port = port }
         comps.queryItems = [URLQueryItem(name: "lang", value: "en"), URLQueryItem(name: "status", value: "false"),
                             URLQueryItem(name: "token", value: t)]
         let socket = RealtimeSocket(url: comps.url!)

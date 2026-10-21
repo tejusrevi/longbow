@@ -1,3 +1,4 @@
+import ImageIO
 import LongbowCore
 import SwiftUI
 
@@ -162,16 +163,17 @@ struct PortraitView: View {
 final class PortraitCache {
     static let shared = PortraitCache()
     private var cache: [String: CGImage] = [:]
+    private let lock = NSLock()
 
-    func cacheLookup(_ key: String) -> CGImage? { cache[key] }
-    func store(_ key: String, _ image: CGImage) { cache[key] = image }
+    func cacheLookup(_ key: String) -> CGImage? { lock.withLock { cache[key] } }
+    func store(_ key: String, _ image: CGImage) { lock.withLock { cache[key] = image } }
 
     func image(look: ArcherLook, expression: Expression, background: Bool, hat: Hat = .none, avatar: Avatar,
                faceOnly: Bool = false, crop: CGRect? = nil, pointSize: CGFloat, scale: CGFloat) -> CGImage? {
         guard pointSize > 1 else { return nil }
         let bounds = crop ?? (faceOnly ? CharacterArt.faceBounds : CharacterArt.portraitBounds)
         let key = "\(look).\(avatar.key).\(expression).\(background).\(hat).\(bounds).\(Int(pointSize)).\(scale)"
-        if let hit = cache[key] { return hit }
+        if let hit = cacheLookup(key) { return hit }
         let ppm = pointSize * scale / bounds.width
         let raw = InkRenderer.image(bounds: bounds, pixelsPerMetre: ppm, frame: 0, seed: look.seed &+ 9,
                                     wobble: 0.004) { c in
@@ -180,7 +182,7 @@ final class PortraitCache {
         }
         // Dot pitch scales with the portrait so small faces stay readable.
         let img = Halftone.decode(raw, scale: scale, spacing: min(2.3, max(1.1, pointSize / 90)))
-        cache[key] = img
+        store(key, img)
         return img
     }
 }
@@ -217,6 +219,45 @@ extension PortraitCache {
         let img = Halftone.decode(raw, scale: scale, spacing: dotSpacing ?? Halftone.spacingPoints)
         store(full, img)
         return img
+    }
+
+    /// Gets a big piece of art ready off the main thread, so the screen keeps
+    /// animating meanwhile. The result is also kept on disk, keyed to this
+    /// build, so later launches only read it back. Afterwards `art(...)` with
+    /// the same arguments is a cache hit.
+    func prepareArt(key: String, bounds: CGRect, pointWidth: CGFloat, scale: CGFloat, dotSpacing: CGFloat? = nil,
+                    draw: @escaping (inout InkCanvas) -> Void) async {
+        guard pointWidth > 1 else { return }
+        let full = "\(key).\(Int(pointWidth)).\(scale).\(dotSpacing ?? 0)"
+        if cacheLookup(full) != nil { return }
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let file = Self.diskURL(full)
+                if let file, let src = CGImageSourceCreateWithURL(file as CFURL, nil),
+                   let img = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) {
+                    self.store(full, img)
+                } else if let img = self.art(key: key, bounds: bounds, pointWidth: pointWidth, scale: scale,
+                                             dotSpacing: dotSpacing, draw: draw), let file {
+                    try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    if let dest = CGImageDestinationCreateWithURL(file as CFURL, "public.png" as CFString, 1, nil) {
+                        CGImageDestinationAddImage(dest, img, nil)
+                        CGImageDestinationFinalize(dest)
+                    }
+                }
+                done.resume()
+            }
+        }
+    }
+
+    /// Caches/ink/<build stamp>/<key>.png. The stamp is the app binary's
+    /// modification time, so any new build redraws instead of reusing old art.
+    private static func diskURL(_ key: String) -> URL? {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
+              let exe = Bundle.main.executableURL,
+              let date = try? exe.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        else { return nil }
+        let stamp = String(Int(date.timeIntervalSince1970))
+        return caches.appendingPathComponent("ink/\(stamp)/\(key).png")
     }
 }
 

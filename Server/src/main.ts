@@ -8,9 +8,16 @@ function rpcPing(ctx: any, logger: any, nk: any, payload: string): string {
   return JSON.stringify({ ok: true, server: "longbow" });
 }
 
+/// Tools and tests only: refuses calls from players (they come with a user
+/// id); server-to-server calls with the runtime http_key have none.
+function requireServerCall(ctx: any): void {
+  if (ctx.userId) throw new Error("not available");
+}
+
 /// Simulates one shot on fresh round conditions. Used to prove the server's
 /// physics matches the app (golden vectors); not part of gameplay.
 function rpcSimulateShots(ctx: any, logger: any, nk: any, payload: string): string {
+  requireServerCall(ctx);
   const reqs: SimulateRequest[] = JSON.parse(payload);
   const out: ShotOutcome[] = [];
   for (let i = 0; i < reqs.length; i++) {

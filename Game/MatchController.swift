@@ -92,6 +92,9 @@ final class MatchController: ObservableObject {
         let archers: [CGPoint]
         let archerHeight: CGFloat
         let shooter: Int
+        /// World x the strip covers: both archers plus 20% of the gap past
+        /// each, the same whoever shoots. Anything beyond is clipped off.
+        let span: ClosedRange<CGFloat>
     }
 
     @Published private(set) var phase: Phase = .intro
@@ -232,7 +235,7 @@ final class MatchController: ObservableObject {
             online.duel.onEnd = { [weak self] winner, reason in self?.serverEnded(winner: winner, reason: reason) }
             online.duel.onPresence = { [weak self] seat, away in self?.opponentPresence(seat: seat, away: away) }
         }
-        services.audio.stopMusic()
+        services.audio.playMusic(.duel)
         beginRound()
     }
 
@@ -272,7 +275,6 @@ final class MatchController: ObservableObject {
             // The server already played this turn for us (the clock ran out while we were away).
             if online != nil, let r = serverResults[engine.state.turn], r.shooter == me { applyServerShot(r) }
             // A protest is under way nearby: a flutter of wings, once a round.
-            if scene.noticeProtester() { services.haptics.flutter() }
             if mode == .passAndPlay {
                 withAnimation { turnNote = "\(names[shooter].lowercased()), you're up." }
                 scene.run(.wait(forDuration: 2.2)) { [weak self] in withAnimation { self?.turnNote = nil } }
@@ -532,11 +534,15 @@ final class MatchController: ObservableObject {
         if let last = path.last { pts.append(CGPoint(x: last.x, y: last.y)) }
         let c = flightConditions ?? engine.state.conditions
         let feet = [c.archerPosition(0), c.archerPosition(1)].map { CGPoint(x: $0.x, y: $0.y) }
+        let lo = min(feet[0].x, feet[1].x), hi = max(feet[0].x, feet[1].x)
+        let extra = (hi - lo) * 0.2
         minimap = Minimap(path: pts, arrow: CGPoint(x: position.x, y: position.y), heading: CGFloat(heading),
                           flown: min(pts.count, index / step + 1), ground: [], archers: feet,
-                          archerHeight: CGFloat(1.95 * config.game.physics.archerScale), shooter: shooter)
+                          archerHeight: CGFloat(1.95 * config.game.physics.archerScale), shooter: shooter,
+                          span: (lo - extra)...(hi + extra))
         flightDistance = Int(distance.rounded())
     }
+
 
     private func afterShot(_ report: TurnReport) {
         scene.updateConditions(engine.state.conditions)

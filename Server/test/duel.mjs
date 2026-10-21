@@ -5,7 +5,10 @@
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const BASE = "http://127.0.0.1:7350", KEY = "longbow-local-key";
+// Local dev server by default; against the hosted one:
+//   NAKAMA_URL=https://longbow-duel.canadacentral.cloudapp.azure.com NAKAMA_SERVER_KEY=... node test/duel.mjs
+const BASE = process.env.NAKAMA_URL || "http://127.0.0.1:7350";
+const KEY = process.env.NAKAMA_SERVER_KEY || "longbow-local-key";
 const OP = { SHOT: 1, READY: 2, START: 10, RESULT: 11, END: 12, REJECT: 15 };
 const mod = readFileSync(new URL("../modules/index.js", import.meta.url), "utf8");
 
@@ -26,7 +29,7 @@ async function rpc(token, id, body) {
 function player(name, token) {
   const ctx = vm.createContext({});
   vm.runInContext(mod, ctx);
-  const ws = new WebSocket(`ws://127.0.0.1:7350/ws?lang=en&status=false&token=${token}`);
+  const ws = new WebSocket(`${BASE.replace(/^http/, "ws")}/ws?lang=en&status=false&token=${token}`);
   const p = { name, ws, ctx, seat: -1, matchId: null, mismatches: 0, results: 0, ended: null, cid: 0, waiters: {} };
   p.send = (env) => { const cid = String(++p.cid); ws.send(JSON.stringify({ cid, ...env })); return new Promise((res) => (p.waiters[cid] = res)); };
   p.sendData = (op, body) => ws.send(JSON.stringify({ match_data_send: { match_id: p.matchId, op_code: String(op),

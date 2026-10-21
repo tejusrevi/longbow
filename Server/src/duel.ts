@@ -250,6 +250,7 @@ function duelSignal(ctx: any, logger: any, nk: any, dispatcher: any, tick: numbe
 
 /// Debug: a duel's full official history, by code.
 function rpcDuelHistory(ctx: any, logger: any, nk: any, payload: string): string {
+  requireServerCall(ctx);
   const code = JSON.parse(payload || "{}").code;
   const found = nk.storageRead([{ collection: CODE_COLLECTION, key: code, userId: SYSTEM_USER }]);
   if (found.length === 0) return JSON.stringify({ error: "no_such_code" });

@@ -12,7 +12,7 @@ type BodyPart = "head" | "body" | "legs";
 
 const PHYSICS = {
   minSpeed: 20, maxSpeed: 75, drag: 0.00015, gravity: 9.8, stepsPerSecond: 120, maxFlightSeconds: 18,
-  boundsMarginX: 800, boundsBottom: -20, archerScale: 1.8, launchOffsetX: 0.35, launchOffsetY: 1.35,
+  boundsMarginX: 800, boundsBottom: -20, archerScale: 2.0, launchOffsetX: 0.35, launchOffsetY: 1.35,
 };
 const AIM = { minAngleTenths: -100, maxAngleTenths: 850 };
 

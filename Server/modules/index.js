@@ -85,7 +85,7 @@ var SplitMix64 = /** @class */ (function () {
 // Shared/golden_shots.json proves it. Never call Math.sin/Math.cos here.
 var PHYSICS = {
     minSpeed: 20, maxSpeed: 75, drag: 0.00015, gravity: 9.8, stepsPerSecond: 120, maxFlightSeconds: 18,
-    boundsMarginX: 800, boundsBottom: -20, archerScale: 1.8, launchOffsetX: 0.35, launchOffsetY: 1.35,
+    boundsMarginX: 800, boundsBottom: -20, archerScale: 2.0, launchOffsetX: 0.35, launchOffsetY: 1.35,
 };
 var AIM = { minAngleTenths: -100, maxAngleTenths: 850 };
 var HILLS = {
@@ -911,6 +911,7 @@ function duelSignal(ctx, logger, nk, dispatcher, tick, s, data) {
 }
 /// Debug: a duel's full official history, by code.
 function rpcDuelHistory(ctx, logger, nk, payload) {
+    requireServerCall(ctx);
     var code = JSON.parse(payload || "{}").code;
     var found = nk.storageRead([{ collection: CODE_COLLECTION, key: code, userId: SYSTEM_USER }]);
     if (found.length === 0)
@@ -921,9 +922,16 @@ function rpcDuelHistory(ctx, logger, nk, payload) {
 function rpcPing(ctx, logger, nk, payload) {
     return JSON.stringify({ ok: true, server: "longbow" });
 }
+/// Tools and tests only: refuses calls from players (they come with a user
+/// id); server-to-server calls with the runtime http_key have none.
+function requireServerCall(ctx) {
+    if (ctx.userId)
+        throw new Error("not available");
+}
 /// Simulates one shot on fresh round conditions. Used to prove the server's
 /// physics matches the app (golden vectors); not part of gameplay.
 function rpcSimulateShots(ctx, logger, nk, payload) {
+    requireServerCall(ctx);
     var reqs = JSON.parse(payload);
     var out = [];
     for (var i = 0; i < reqs.length; i++) {

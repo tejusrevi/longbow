@@ -166,6 +166,7 @@ final class MatchScene: SKScene {
     private func spawnChickens(_ c: RoundConditions) {
         chickens.forEach { $0.removeFromParent() }
         chickens.removeAll()
+        heckler = nil
         // Near an archer, where arrows actually land and the camera looks.
         let d = CGFloat(c.distance)
         guard d > 30 else { return }
@@ -184,42 +185,47 @@ final class MatchScene: SKScene {
             worldLayer.addChild(ch)
             chickens.append(ch)
         }
-        // Now and then the chickens have had enough of arrows: a protester
-        // turns up close to one of the players, sign and all.
-        var protestChance = 0.55
-        #if DEBUG
-        if UserDefaults.standard.bool(forKey: "forceProtest") { protestChance = 1 }
-        #endif
-        if Double.random(in: 0..<1) < protestChance {
-            let side = controller?.humans.randomElement() ?? 0
-            let toward: CGFloat = side == 0 ? 1 : -1
-            let home = CGFloat(c.archerPosition(side).x)
-            let x = home + toward * .random(in: 10...15)
-            let ch = ChickenNode(range: min(home + toward * 9, home + toward * 18)...max(home + toward * 9, home + toward * 18),
-                                 boil: boil)
-            ch.setScale(archerScale)
-            ch.position = CGPoint(x: x, y: CGFloat(c.terrain.height(at: Double(x))))
-            ch.zPosition = 17
-            ch.facing = -toward // facing the archer, naturally
-            ch.holdSign(ProtestSign.nextSlogan())
-            worldLayer.addChild(ch)
-            chickens.append(ch)
-            protester = ch
-        } else {
-            protester = nil
-        }
-        protesterNoticed = false
     }
 
-    /// The chicken with the placard this round, if any.
-    private(set) var protester: ChickenNode?
-    private var protesterNoticed = false
+    /// The chicken that ran out to mock the last bad miss, if any.
+    private var heckler: ChickenNode?
+    /// Shots since a heckler last turned up (they don't come every time).
+    private var shotsSinceHeckle = 99
 
-    /// True the first time a player's turn starts with a protest going on.
-    func noticeProtester() -> Bool {
-        guard let p = protester, !p.isDead, !protesterNoticed else { return false }
-        protesterNoticed = true
-        return true
+    /// A player's arrow landed well wide: now and then a chicken dashes in
+    /// a few metres in front of the shooter, where the camera finds it on
+    /// their next turn, turns round and holds up a sign.
+    private func maybeHeckle(shooter: Int, viewWidth: CGFloat) {
+        shotsSinceHeckle += 1
+        var chance = 0.4
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "forceProtest") { chance = 1 }
+        #endif
+        guard let c = conditions, controller?.humans.contains(shooter) == true,
+              shotsSinceHeckle >= 3 || chance >= 1, Double.random(in: 0..<1) < chance else { return }
+        shotsSinceHeckle = 0
+        if let old = heckler {
+            old.removeFromParent()
+            chickens.removeAll { $0 === old }
+        }
+        // `toward` points from the shooter out at the field.
+        let home = archers[shooter].position.x
+        let toward = CGFloat(RoundConditions.facing(shooter))
+        let stand = home + toward * .random(in: 5...7)
+        let start = stand + toward * (viewWidth / 2 + 6)
+        let ch = ChickenNode(range: min(stand - 2, stand + 2)...max(stand - 2, stand + 2), boil: boil)
+        ch.setScale(archerScale)
+        ch.position = CGPoint(x: start, y: CGFloat(c.terrain.height(at: Double(start))))
+        ch.zPosition = 17
+        worldLayer.addChild(ch)
+        chickens.append(ch)
+        heckler = ch
+        ch.dash(to: stand, speed: 14) { [weak self, weak ch] in
+            guard let self, let ch, !ch.isDead else { return }
+            ch.facing = -toward // right at the shooter
+            ch.holdSign(ProtestSign.nextSlogan())
+            self.controller?.services.haptics.flutter()
+        }
     }
 
     /// The flying arrow went through a chicken. It doesn't stop the arrow.
@@ -461,7 +467,7 @@ final class MatchScene: SKScene {
         shooter.setAim(angleDegrees: CGFloat(report.input.angleDegrees), power: 0, nockedArrow: true)
         shooter.releaseShot()
         services.audio.play(.twang)
-        services.audio.play(.whoosh, volume: 0.6)
+        services.audio.play(.whoosh, volume: 0.5)
         if controller?.humans.contains(report.shooter) == true { services.haptics.release() }
         showLastBreath(nil)
 
@@ -578,7 +584,7 @@ final class MatchScene: SKScene {
             victim.react(to: part)
             controller.applyHealth(r.health)
             switch part {
-            case .head: services.audio.play(.clang); services.audio.play(.bonk, volume: 0.6)
+            case .head: services.audio.play(.clang)
             case .body, .legs: services.audio.play(.thwack); services.audio.play(.grunt, volume: 0.8)
             }
             if controller.humans.contains(index) { services.haptics.tookHit() }
@@ -615,6 +621,7 @@ final class MatchScene: SKScene {
                 let x = index == 0 ? -offset : c.distance + offset
                 let to = CGPoint(x: x, y: c.terrain.height(at: x))
                 victim.stagger(to: to, ground: { CGFloat(c.terrain.height(at: Double($0))) }, delay: 0.55)
+                run(.wait(forDuration: 0.6)) { services.audio.play(.scuff, volume: 0.7) }
                 say(["whoa whoa whoa!", "my feet!", "back off!", "ow, rude."], by: index, chance: 0.5, after: 1.3)
                 if controller.humans.contains(index) {
                     run(.wait(forDuration: 0.55)) { services.haptics.thud() }
@@ -678,6 +685,9 @@ final class MatchScene: SKScene {
                 if (r.missDistance ?? 0) > 15, cam.isVisible(world: CGPoint(x: targetFeet.x, y: targetFeet.y + 1)) {
                     archers[target].taunt()
                     say(["missed me!", "nice try.", "over here!", "you call that aiming?", "*yawn*"], by: target, chance: 0.75)
+                }
+                if (r.missDistance ?? 0) > 6 {
+                    maybeHeckle(shooter: r.shooter, viewWidth: CGFloat(width))
                 }
                 if (r.missDistance ?? 0) > 20 {
                     say(["warm-up shot.", "the wind did that.", "...meant to do that.", "bow's broken."], by: r.shooter,
