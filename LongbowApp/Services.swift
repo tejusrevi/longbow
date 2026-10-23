@@ -11,6 +11,8 @@ final class Services {
     let monetization: MonetizationService
     /// The game server (friend duels and, later, accounts and leagues).
     @MainActor lazy var online: NakamaClient = .live()
+    /// Gamertag, country and account deletion.
+    @MainActor lazy var account = AccountStore(client: online)
 
     init(
         settings: SettingsStore,

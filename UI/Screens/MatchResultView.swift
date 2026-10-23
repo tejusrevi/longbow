@@ -12,8 +12,12 @@ struct MatchResultView: View {
     @State private var xpShown: Int = 0
     @State private var revealed = 0
 
-    /// Score from this player's side.
-    private var scoreText: String { "\(summary.score[summary.me])–\(summary.score[1 - summary.me])" }
+    /// One round, so the headline is how much health the winner kept.
+    private var winnerHealth: Int { summary.health[summary.winner] }
+    private var healthCaption: String {
+        if summary.mode == .passAndPlay { return "health left" }
+        return summary.won ? "health to spare" : "\(opponentName.lowercased()) had left"
+    }
     private var opponentName: String { summary.mode.isOnline ? summary.names[1 - summary.me].capitalized : "Gus" }
 
     private var title: String {
@@ -28,12 +32,15 @@ struct MatchResultView: View {
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(title).font(Theme.display(24)).tracking(3)
-                    Text(scoreText)
-                        .font(Theme.display(min(118, geo.size.height * 0.24)))
-                        .monospacedDigit()
-                        .minimumScaleFactor(0.5)
-                        .lineLimit(1)
-                        .accessibilityLabel(Text("Score \(summary.score[summary.me]) to \(summary.score[1 - summary.me])"))
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text("\(winnerHealth)")
+                            .font(Theme.display(min(118, geo.size.height * 0.24)))
+                            .monospacedDigit()
+                            .minimumScaleFactor(0.5)
+                            .lineLimit(1)
+                        Text(healthCaption).font(Theme.mono(18))
+                    }
+                    .accessibilityElement(children: .combine)
                     if let rewards = summary.rewards {
                         xpBar(rewards).frame(width: min(400, geo.size.width * 0.4))
                         rewardLines(rewards)
@@ -92,11 +99,11 @@ struct MatchResultView: View {
 
     private var shareText: String {
         if summary.mode == .passAndPlay {
-            return "\(summary.names[summary.winner]) won \(scoreText) in \(AppInfo.displayName)."
+            return "\(summary.names[summary.winner]) won with \(winnerHealth) health left in \(AppInfo.displayName)."
         }
         return summary.won
-            ? "I beat \(opponentName) \(scoreText) in \(AppInfo.displayName)."
-            : "\(opponentName) beat me \(summary.score[1 - summary.me])–\(summary.score[summary.me]) in \(AppInfo.displayName). Rematch."
+            ? "I beat \(opponentName) with \(winnerHealth) health to spare in \(AppInfo.displayName)."
+            : "\(opponentName) beat me with \(winnerHealth) health left in \(AppInfo.displayName). Rematch."
     }
 
     private func xpBar(_ r: MatchRewards) -> some View {
@@ -106,7 +113,7 @@ struct MatchResultView: View {
             HStack {
                 Text("LVL \(info.level)").font(Theme.mono(14, bold: true))
                 if leveledUp {
-                    Text("level up!").font(Theme.hand(18)).transition(.scale.combined(with: .opacity))
+                    Text("level up!").font(Theme.mono(14)).transition(.scale.combined(with: .opacity))
                 }
                 Spacer()
                 Text("+\(r.totalXP) xp").font(Theme.mono(14, bold: true))
@@ -124,12 +131,12 @@ struct MatchResultView: View {
         VStack(alignment: .leading, spacing: 5) {
             ForEach(Array(r.newRecords.enumerated()), id: \.offset) { i, rec in
                 if revealed > i {
-                    Text("new record — \(rec)").font(Theme.hand(17))
+                    Text("new record — \(rec)").font(Theme.mono(14))
                         .transition(.move(edge: .leading).combined(with: .opacity))
                 }
             }
             if revealed > r.newRecords.count && r.winStreak >= 2 {
-                Text("\(r.winStreak) wins in a row.").font(Theme.hand(17)).transition(.opacity)
+                Text("\(r.winStreak) wins in a row.").font(Theme.mono(14)).transition(.opacity)
             }
         }
         .lineLimit(1)
@@ -188,7 +195,7 @@ struct MatchResultView: View {
                 PortraitView(look: .bjorn, expression: .victorious, hat: hat)
                     .frame(width: size, height: size)
             }
-            Text(hat.title.lowercased()).font(Theme.hand(22))
+            Text(hat.title.lowercased()).font(Theme.mono(18))
             Button(wearing ? "WEARING IT" : "WEAR IT") {
                 progress.equippedHat = hat
                 services.haptics.selection()

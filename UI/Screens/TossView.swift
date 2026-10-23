@@ -40,10 +40,10 @@ struct TossView: View {
                 }
                 VStack(spacing: 2) {
                     Text(decided ? headline : "who shoots first?")
-                        .font(decided ? Theme.display(30) : Theme.hand(26))
+                        .font(decided ? Theme.display(30) : Theme.mono(21))
                         .contentTransition(.opacity)
                     Text(decided ? "the chicken has spoken." : "the chicken decides.")
-                        .font(Theme.hand(17))
+                        .font(Theme.mono(14))
                         .opacity(0.8)
                 }
                 .multilineTextAlignment(.center)

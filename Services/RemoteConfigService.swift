@@ -31,7 +31,7 @@ struct AppConfig: Codable {
 
 struct CameraConfig: Codable {
     /// World width (m) visible while aiming.
-    var aimViewWidth: Double = 20
+    var aimViewWidth: Double = 26
     var flightMaxViewWidth: Double = 120
     var impactViewWidth: Double = 28
     var followSmoothing: Double = 0.45

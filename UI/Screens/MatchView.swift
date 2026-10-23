@@ -85,7 +85,7 @@ private struct MatchHUD: View {
             if let banner = controller.banner {
                 VStack(spacing: 2) {
                     Text(banner.title).font(Theme.display(76)).monospacedDigit()
-                    if let s = banner.subtitle { Text(s).font(Theme.hand(26)) }
+                    if let s = banner.subtitle { Text(s).font(Theme.mono(21)) }
                 }
                 .padding(.horizontal, 60).padding(.vertical, 30)
                 .background(Ellipse().fill(Color.paper).blur(radius: 24).opacity(0.92))
@@ -106,17 +106,17 @@ private struct MatchHUD: View {
 
     private var topBar: some View {
         HStack(alignment: .top, spacing: 16) {
-            PlayerPlate(name: controller.names[0], health: controller.health[0],
+            PlayerPlate(name: controller.names[0], country: controller.countries[0], health: controller.health[0],
                         roundsWon: controller.roundsWon[0], roundsToWin: controller.roundsToWin, trailing: false)
             Spacer(minLength: 8)
             VStack(spacing: 6) {
                 WindIndicator(wind: controller.windWorld)
                 if let note = controller.turnNote {
-                    Text(note).font(Theme.hand(18)).transition(.opacity.combined(with: .move(edge: .top)))
+                    Text(note).font(Theme.mono(14)).transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
             Spacer(minLength: 8)
-            PlayerPlate(name: controller.names[1], health: controller.health[1],
+            PlayerPlate(name: controller.names[1], country: controller.countries[1], health: controller.health[1],
                         roundsWon: controller.roundsWon[1], roundsToWin: controller.roundsToWin, trailing: true)
         }
     }
@@ -126,6 +126,7 @@ private struct MatchHUD: View {
 /// full bar width (16-character gamertags fit) and shrink rather than clip.
 private struct PlayerPlate: View {
     let name: String
+    let country: String
     let health: Int
     let roundsWon: Int
     let roundsToWin: Int
@@ -134,13 +135,17 @@ private struct PlayerPlate: View {
     var body: some View {
         VStack(alignment: trailing ? .trailing : .leading, spacing: 5) {
             HStack(spacing: 8) {
-                if trailing { RoundPips(won: roundsWon, of: roundsToWin) }
+                // One-round matches have nothing to count.
+                if trailing && roundsToWin > 1 { RoundPips(won: roundsWon, of: roundsToWin) }
                 Text(name)
                     .font(Theme.mono(15, bold: true, relativeTo: .headline))
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                     .layoutPriority(1)
-                if !trailing { RoundPips(won: roundsWon, of: roundsToWin) }
+                if !country.isEmpty {
+                    Text(country).font(Theme.mono(11, bold: true)).opacity(0.6).accessibilityLabel(Text(Countries.name(country)))
+                }
+                if !trailing && roundsToWin > 1 { RoundPips(won: roundsWon, of: roundsToWin) }
             }
             .frame(width: 184, alignment: trailing ? .trailing : .leading)
             HealthBar(value: health, mirrored: trailing, height: 14)

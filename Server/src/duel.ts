@@ -19,11 +19,13 @@ const ANIMATION_ALLOWANCE_S = 16; // longest flight + reactions before the next 
 const ROUND_BREAK_S = 10;          // round banner and the opening pan of the next round
 const AWAY_GRACE_S = 30;
 
-interface Seat { userId: string; sessionId: string; name: string; avatar: any; hat: string; present: boolean; awaySince: number }
+interface Seat { userId: string; sessionId: string; name: string; country: string; avatar: any; hat: string; present: boolean; awaySince: number }
 
 interface DuelState {
   code: string; challenge: string; seats: Array<Seat | null>; engine: MatchState | null; seedHex: string;
   deadlineTick: number; tick: number; endedTick: number; createdBy: string;
+  /// Quick match: the two players the matchmaker paired; nobody else gets in.
+  invited: string[] | null;
 }
 
 function randomHex64(): string {
@@ -76,6 +78,16 @@ function rpcJoinDuel(ctx: any, logger: any, nk: any, payload: string): string {
   return JSON.stringify({ matchId: found[0].value.matchId });
 }
 
+/// Quick match: the matchmaker paired two strangers. Their duel is like a
+/// friend duel without a code, at medium difficulty, open only to the pair.
+function quickMatchMatched(ctx: any, logger: any, nk: any, matches: any[]): string {
+  const ids: string[] = [];
+  for (let i = 0; i < matches.length; i++) ids.push(matches[i].presence.userId);
+  const matchId = nk.matchCreate(DUEL_MODULE, { code: "QUICK", challenge: "medium", createdBy: ids[0], invited: ids.join(",") });
+  logger.info("quick match for %s", ids.join(" vs "));
+  return matchId;
+}
+
 // --- Match handler ----------------------------------------------------------
 
 function label(s: DuelState): string {
@@ -86,7 +98,8 @@ function label(s: DuelState): string {
 
 function duelInit(ctx: any, logger: any, nk: any, params: any): { state: DuelState; tickRate: number; label: string } {
   const s: DuelState = { code: params.code, challenge: params.challenge || "medium", seats: [null, null], engine: null,
-                         seedHex: "", deadlineTick: 0, tick: 0, endedTick: -1, createdBy: params.createdBy || "" };
+                         seedHex: "", deadlineTick: 0, tick: 0, endedTick: -1, createdBy: params.createdBy || "",
+                         invited: params.invited ? String(params.invited).split(",") : null };
   return { state: s, tickRate: TICK_RATE, label: label(s) };
 }
 
@@ -94,10 +107,22 @@ function duelJoinAttempt(ctx: any, logger: any, nk: any, dispatcher: any, tick: 
                          metadata: any): { state: DuelState; accept: boolean; rejectMessage?: string } {
   if (seatOf(s, presence.userId) >= 0) return { state: s, accept: true };
   if (s.engine !== null || (s.seats[0] && s.seats[1])) return { state: s, accept: false, rejectMessage: "full" };
+  if (s.invited && s.invited.indexOf(presence.userId) < 0) return { state: s, accept: false, rejectMessage: "full" };
   // The creator always takes the left seat.
   let seat = s.seats[0] ? 1 : 0;
   if (presence.userId !== s.createdBy && !s.seats[1] && seat === 0) seat = 1;
-  s.seats[seat] = { userId: presence.userId, sessionId: presence.sessionId, name: String((metadata && metadata.name) || "PLAYER").slice(0, 16),
+  // Name and country come from the account, not from what the app says.
+  const profile = profileOf(nk, presence.userId);
+  // A friend arrived with the code: the creator may have stepped away to send
+  // it (Messages, say). Ping their phone so they come back and play.
+  if (!s.invited && s.createdBy && presence.userId !== s.createdBy) {
+    const name = profile.gamertag || "Your friend";
+    notifyPlayer(ctx, logger, nk, s.createdBy, name + " joined your duel", "Tap to play.",
+                 { matchId: ctx.matchId, code: s.code });
+  }
+  s.seats[seat] = { userId: presence.userId, sessionId: presence.sessionId,
+                    name: profile.gamertag || String((metadata && metadata.name) || "PLAYER").slice(0, 16),
+                    country: profile.country || "",
                     avatar: metadata && metadata.avatar ? JSON.parse(metadata.avatar) : null, hat: (metadata && metadata.hat) || "none",
                     present: false, awaySince: 0 };
   return { state: s, accept: true };
@@ -112,7 +137,7 @@ function startMessage(s: DuelState): any {
   return {
     seed: s.seedHex, arena: e.state.arena, roundsToWin: e.state.roundsToWin, challenge: s.challenge,
     firstShooter: tossWinner(u64FromHex(s.seedHex)), turn: e.state.turn,
-    seats: s.seats.map(function (st) { return st ? { userId: st.userId, name: st.name, avatar: st.avatar, hat: st.hat } : null; }),
+    seats: s.seats.map(function (st) { return st ? { userId: st.userId, name: st.name, country: st.country, avatar: st.avatar, hat: st.hat } : null; }),
     history: (s as any).history || [],
   };
 }
@@ -150,7 +175,9 @@ function duelLeave(ctx: any, logger: any, nk: any, dispatcher: any, tick: number
     if (st.sessionId !== presences[i].sessionId) continue;
     st.present = false;
     st.awaySince = tick;
-    if (s.engine === null) s.seats[seat] = null; // left the waiting room
+    // Left the waiting room. The creator keeps their seat (they may have gone
+    // to send the code, and the push brings them back); anyone else frees it.
+    if (s.engine === null && st.userId !== s.createdBy) s.seats[seat] = null;
     else if (s.endedTick < 0) broadcast(dispatcher, OP.OPPONENT_AWAY, { seat: seat, graceSeconds: AWAY_GRACE_S });
   }
   dispatcher.matchLabelUpdate(label(s));

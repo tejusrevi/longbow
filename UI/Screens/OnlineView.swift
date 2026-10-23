@@ -1,9 +1,9 @@
 import LongbowCore
 import SwiftUI
 
-/// Friend duel lobby (spec A7.2, `Online.dc.html`): start a duel and share its
-/// 4-character code, or type a friend's code to join. The match starts the
-/// moment both archers are in.
+/// Online lobby (spec A7.2, A7.3, `Online.dc.html`): quick match against
+/// anyone who's looking, or a friend duel by 4-character code. The match
+/// starts the moment both archers are in. Needs a gamertag first.
 struct OnlineView: View {
     let onStart: (OnlineMatch) -> Void
     let onClose: () -> Void
@@ -16,7 +16,7 @@ struct OnlineView: View {
                 DuelLobby(duel: duel, onStart: onStart, onClose: {
                     duel.close()
                     onClose()
-                })
+                }, account: services.account)
             } else {
                 Color.paper
             }
@@ -33,14 +33,23 @@ private struct DuelLobby: View {
     let onClose: () -> Void
     @Environment(\.services) private var services
     @EnvironmentObject private var progress: ProgressStore
-    @AppStorage("onlineName") private var name = "ARCHER"
+    @ObservedObject private var account: AccountStore
     @AppStorage("onlineChallenge") private var challengeRaw = HitChallenge.medium.rawValue
     @State private var code = ""
+    @State private var editingTag = false
     @FocusState private var codeFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var push = PushService.shared
+
+    init(duel: FriendDuel, onStart: @escaping (OnlineMatch) -> Void, onClose: @escaping () -> Void, account: AccountStore) {
+        self.duel = duel
+        self.onStart = onStart
+        self.onClose = onClose
+        self.account = account
+    }
 
     private var me: FriendDuel.Me {
-        FriendDuel.Me(name: name.trimmingCharacters(in: .whitespaces).isEmpty ? "ARCHER" : name,
-                      avatar: progress.avatar, hat: progress.equippedHat)
+        FriendDuel.Me(name: account.gamertag ?? "ARCHER", avatar: progress.avatar, hat: progress.equippedHat)
     }
 
     var body: some View {
@@ -50,7 +59,7 @@ private struct DuelLobby: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 16) {
                     BackButton(action: onClose)
-                    Text("FRIEND DUEL").font(Theme.display(30)).accessibilityAddTraits(.isHeader)
+                    Text("ONLINE").font(Theme.display(30)).accessibilityAddTraits(.isHeader)
                     Spacer()
                 }
                 switch duel.stage {
@@ -58,6 +67,8 @@ private struct DuelLobby: View {
                     lobby
                 case .connecting:
                     status("calling the server...")
+                case .searching:
+                    searching
                 case let .waiting(code) where !code.isEmpty:
                     waiting(code)
                 case .waiting:
@@ -70,14 +81,38 @@ private struct DuelLobby: View {
             .padding(.horizontal, 16)
             .padding(.top, 6)
         }
-        #if DEBUG
-        // Test hooks: `-onlineCreate YES -codeFile /path` or `-onlineJoin ABCD`.
-        .task {
-            let d = UserDefaults.standard
-            if d.bool(forKey: "onlineCreate") { duel.create(challenge: HitChallenge(rawValue: challengeRaw) ?? .medium, me: me) }
-            if let code = d.string(forKey: "onlineJoin") { duel.join(code: code, me: me) }
+        .fullScreenCover(isPresented: $editingTag) {
+            GamertagSheet(onDone: { editingTag = false }, onCancel: {
+                editingTag = false
+                // No gamertag, no online play: back to the title.
+                if !account.hasGamertag { onClose() }
+            }, account: account)
+            .environment(\.services, services)
         }
-        #endif
+        .task {
+            // Game Center first, so a returning player lands on their own account.
+            GameCenterAuth.shared.start()
+            await account.refresh()
+            #if DEBUG
+            // Test hooks: `-onlineName ALICE` picks a gamertag on a fresh device;
+            // `-onlineCreate YES -codeFile /path`, `-onlineJoin ABCD` or `-onlineQuick YES`.
+            let d = UserDefaults.standard
+            if !account.hasGamertag, let name = d.string(forKey: "onlineName") {
+                try? await account.save(gamertag: "\(name)_\(Int.random(in: 100...999))", country: "CA")
+            }
+            if account.hasGamertag {
+                if d.bool(forKey: "onlineCreate") { duel.create(challenge: HitChallenge(rawValue: challengeRaw) ?? .medium, me: me) }
+                if let code = d.string(forKey: "onlineJoin") { duel.join(code: code, me: me) }
+                if d.bool(forKey: "onlineQuick") { duel.quickMatch(me: me) }
+            }
+            #endif
+            if !account.hasGamertag { editingTag = true }
+            openPendingDuel()
+        }
+        .onChange(of: push.pendingMatchId) { _, _ in openPendingDuel() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { duel.resume(me: me) }
+        }
         .onChange(of: duel.stage) { _, stage in
             #if DEBUG
             if case let .waiting(code) = stage, !code.isEmpty, let path = UserDefaults.standard.string(forKey: "codeFile") {
@@ -96,14 +131,15 @@ private struct DuelLobby: View {
     private var lobby: some View {
         HStack(alignment: .top, spacing: 24) {
             VStack(alignment: .leading, spacing: 10) {
-                label("YOUR NAME")
-                TextField("ARCHER", text: Binding(get: { name }, set: { name = String($0.uppercased().prefix(12)) }))
-                    .font(Theme.display(20))
-                    .textInputAutocapitalization(.characters)
-                    .autocorrectionDisabled()
-                    .padding(.horizontal, 14)
-                    .frame(height: 48)
-                    .background(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.ink, lineWidth: 2))
+                label("PLAYING AS")
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(account.gamertag ?? "...").font(Theme.display(22)).lineLimit(1).minimumScaleFactor(0.6)
+                    if let c = account.country { Text(c).font(Theme.mono(13, bold: true)).opacity(0.7) }
+                    Button("change") { editingTag = true }
+                        .font(Theme.mono(14))
+                        .underline()
+                        .buttonStyle(.plain)
+                }
                 label("HOW HARD").padding(.top, 6)
                 HStack(spacing: 8) {
                     ForEach(HitChallenge.allCases, id: \.self) { c in
@@ -124,19 +160,26 @@ private struct DuelLobby: View {
                         .accessibilityAddTraits(on ? .isSelected : [])
                     }
                 }
-                Text("the one who starts the duel picks").font(Theme.hand(15)).opacity(0.7)
+                Text("for friend duels. quick match is medium.").font(Theme.mono(12)).opacity(0.7)
                 if case let .failed(message) = duel.stage {
-                    Text(message).font(Theme.hand(17)).padding(.top, 6)
+                    Text(message).font(Theme.mono(14)).padding(.top, 6)
                 }
             }
             .frame(width: 280, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 14) {
-                Button("START A DUEL") {
+                Button("QUICK MATCH") {
                     services.haptics.selection()
-                    duel.create(challenge: HitChallenge(rawValue: challengeRaw) ?? .medium, me: me)
+                    duel.quickMatch(me: me)
                 }
                 .buttonStyle(PillButtonStyle(primary: true))
+                Button("DUEL A FRIEND") {
+                    services.haptics.selection()
+                    // So we can tell you when they join while you're off sending the code.
+                    PushService.shared.requestIfNeeded()
+                    duel.create(challenge: HitChallenge(rawValue: challengeRaw) ?? .medium, me: me)
+                }
+                .buttonStyle(PillButtonStyle(primary: false))
 
                 label("OR JOIN WITH A CODE").padding(.top, 4)
                 HStack(spacing: 12) {
@@ -161,6 +204,14 @@ private struct DuelLobby: View {
             }
             .frame(maxWidth: 360)
         }
+    }
+
+    /// A tapped "your friend joined" notification: back into that duel.
+    private func openPendingDuel() {
+        guard account.hasGamertag, let id = push.pendingMatchId else { return }
+        push.pendingMatchId = nil
+        if duel.matchId == id { duel.resume(me: me); return }
+        duel.rejoin(matchId: id, code: push.pendingCode, me: me)
     }
 
     private func joinIfReady() {
@@ -206,7 +257,7 @@ private struct DuelLobby: View {
                 .padding(.top, 4)
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text("waiting for your friend...").font(Theme.hand(24))
+                Text("waiting for your friend...").font(Theme.mono(19))
                 Text("the duel starts as soon as they join.").font(Theme.mono(13)).opacity(0.75)
                 Button("CANCEL") {
                     duel.close()
@@ -220,8 +271,26 @@ private struct DuelLobby: View {
         .padding(.top, 8)
     }
 
+    // MARK: Quick match
+
+    private var searching: some View {
+        VStack(spacing: 10) {
+            Text("looking for an archer...").font(Theme.mono(21))
+            Text("anyone in the world who taps quick match right now.").font(Theme.mono(13)).opacity(0.75)
+            Button("CANCEL") {
+                services.haptics.selection()
+                duel.cancelSearch()
+            }
+            .buttonStyle(PillButtonStyle(primary: false))
+            .frame(width: 180)
+            .padding(.top, 10)
+        }
+        .padding(.top, 30)
+        .frame(maxWidth: .infinity)
+    }
+
     private func status(_ text: String) -> some View {
-        Text(text).font(Theme.hand(26)).padding(.top, 30).frame(maxWidth: .infinity)
+        Text(text).font(Theme.mono(21)).padding(.top, 30).frame(maxWidth: .infinity)
     }
 
     private func label(_ text: String) -> some View {

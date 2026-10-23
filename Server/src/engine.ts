@@ -3,7 +3,7 @@
 // it relies on. Shared/golden_matches.json proves it plays out exactly like
 // the app, turn by turn.
 
-const RULES = { roundsToWin: 3, maxShotsPerPlayerPerRound: 20, startHealth: 100, shotTimeLimitSeconds: 20 };
+const RULES = { roundsToWin: 1, maxShotsPerPlayerPerRound: 20, startHealth: 100, shotTimeLimitSeconds: 20 };
 const DAMAGE: { [part: string]: number } = { head: 50, body: 25, legs: 15 };
 const NEAR_MISS_DISTANCE = 3;
 

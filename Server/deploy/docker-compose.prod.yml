@@ -48,6 +48,8 @@ services:
         --session.encryption_key ${NAKAMA_SESSION_KEY:?set in .env}
         --session.refresh_encryption_key ${NAKAMA_REFRESH_KEY:?set in .env}
         --runtime.js_entrypoint index.js
+        --runtime.env "PUSH_URL=http://pusher:8080/send"
+        --runtime.env "PUSH_SECRET=${PUSH_SECRET:?set in .env}"
     volumes:
       - ./modules:/nakama/data/modules:ro
     # Only Caddy talks to the API from outside; the console stays on localhost.
@@ -58,6 +60,22 @@ services:
       test: ["CMD", "/nakama/nakama", "healthcheck"]
       interval: 10s
       retries: 20
+
+  # Apple push sender (pusher/server.mjs). No published port: only Nakama
+  # can reach it, and only with PUSH_SECRET.
+  pusher:
+    image: node:22.11.0-alpine
+    restart: unless-stopped
+    command: ["node", "/app/server.mjs"]
+    environment:
+      APNS_KEY_ID: ${APNS_KEY_ID:?set in .env}
+      APNS_TEAM_ID: Z36U6RR5Z3
+      APNS_TOPIC: com.tejusrevi.longbow
+      APNS_KEY_FILE: /keys/AuthKey_${APNS_KEY_ID}.p8
+      PUSH_SECRET: ${PUSH_SECRET}
+    volumes:
+      - ./pusher:/app:ro
+      - ./apns:/keys:ro
 
   caddy:
     image: caddy:2.10.2-alpine

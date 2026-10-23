@@ -31,7 +31,7 @@ final class MatchScene: SKScene {
     private let aimGuide = DottedPath()
     private let ghost = DottedPath()
     private let ghostMark = InkShape()
-    private let lastBreathLabel = HUD.label("last breath", font: GameFont.hand, size: 20)
+    private let lastBreathLabel = HUD.label("last breath", font: GameFont.mono, size: 16)
 
     // Flight
     private struct Flight {
@@ -251,7 +251,9 @@ final class MatchScene: SKScene {
         let dir = RoundConditions.facing(i)
         let w = CGFloat(appConfig.camera.aimViewWidth)
         let h = w * size.height / max(size.width, 1)
-        return (CGPoint(x: feet.x + dir * 0.3 * w, y: feet.y + 0.3 * h), w)
+        // The shooter stands a little off centre, toward their own side: room
+        // behind for the power gauge, room ahead to see the arrow go.
+        return (CGPoint(x: feet.x + dir * 0.08 * w, y: feet.y + 0.3 * h), w)
     }
 
     /// Opening shot of each round (A6.8): show the whole field once, then glide
@@ -412,12 +414,12 @@ final class MatchScene: SKScene {
             aimGuide.points = stride(from: 0, to: min(n, o.path.count), by: 2).map { CGPoint(x: o.path[$0].x, y: o.path[$0].y) }
         }
 
-        // Haptic tick and creak every 5 % of power (A6.2, A16).
+        // Haptic tick and a ratchet click every 5 % of power (A6.2, A16).
         let tick = Int(input.power * 20)
         if tick != lastPowerTick {
             if lastPowerTick >= 0 && tick > 0 {
                 controller.services.haptics.powerTick()
-                if tick % 2 == 0 { controller.services.audio.play(.creak(power: input.power), volume: 0.7) }
+                controller.services.audio.play(.ratchet(power: input.power), volume: 0.6)
             }
             lastPowerTick = tick
         }
@@ -834,7 +836,7 @@ final class MatchScene: SKScene {
         }
         for (i, medal) in medals.enumerated() {
             let stamp = SKNode()
-            let text = HUD.label(medal, font: GameFont.hand, size: 22)
+            let text = HUD.label(medal, font: GameFont.mono, size: 17)
             let w = text.frame.width + 26, h: CGFloat = 36
             let box = SKShapeNode(rect: CGRect(x: -w / 2, y: -h / 2, width: w, height: h), cornerRadius: 9)
             box.strokeColor = .ink
@@ -955,7 +957,30 @@ final class MatchScene: SKScene {
         }
         let p = cam.hudPoint(world: world)
         node.position = CGPoint(x: p.x + offset.x, y: p.y + offset.y)
+        keepOnScreen(node)
     }
+
+    /// Nudges pinned text back inside the safe area and below the name plates
+    /// and health bars, so a callout near an edge is never cut off or covered.
+    private func keepOnScreen(_ node: SKNode) {
+        guard !node.isHidden else { return }
+        let f = node.calculateAccumulatedFrame()
+        guard f.width > 0, f.height > 0 else { return }
+        let insets = view?.safeAreaInsets ?? .zero
+        let minX = -size.width / 2 + max(insets.left, 12) + 8
+        let maxX = size.width / 2 - max(insets.right, 12) - 8
+        let minY = -size.height / 2 + max(insets.bottom, 8) + 8
+        let maxY = size.height / 2 - Self.topHUDHeight
+        var dx: CGFloat = 0, dy: CGFloat = 0
+        if f.minX < minX { dx = minX - f.minX } else if f.maxX > maxX { dx = maxX - f.maxX }
+        if f.maxY > maxY { dy = maxY - f.maxY } else if f.minY < minY { dy = minY - f.minY }
+        node.position.x += dx
+        node.position.y += dy
+    }
+
+    /// Height of the SwiftUI strip along the top: names, round dots, health
+    /// bars and wind (or the mini-map in flight).
+    private static let topHUDHeight: CGFloat = 76
 
     private func unpin(_ node: SKNode) {
         pinned.removeAll { $0.node === node }
@@ -990,6 +1015,7 @@ final class MatchScene: SKScene {
         for (node, w, o) in pinned {
             let p = cam.hudPoint(world: w)
             node.position = CGPoint(x: p.x + o.x, y: p.y + o.y)
+            keepOnScreen(node)
         }
         if !chickens.isEmpty, let terrain = conditions?.terrain {
             for ch in chickens {

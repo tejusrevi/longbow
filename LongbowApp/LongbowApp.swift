@@ -4,6 +4,7 @@ import SwiftUI
 
 @main
 struct LongbowApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var services = Services.shared
 
     var body: some Scene {
@@ -16,6 +17,8 @@ struct LongbowApp: App {
                 .persistentSystemOverlays(.hidden)
                 .preferredColorScheme(.light)
                 .onAppear {
+                    PushService.shared.client = services.online
+                    PushService.shared.registerIfAllowed()
                     services.analytics.log("app_open", ["isFirstLaunch": !UserDefaults.standard.bool(forKey: "launchedBefore")])
                     UserDefaults.standard.set(true, forKey: "launchedBefore")
                 }
@@ -52,6 +55,7 @@ enum Route: Equatable {
 struct RootView: View {
     @Environment(\.services) private var services
     @State private var route: Route = .splash
+    @ObservedObject private var push = PushService.shared
     @State private var autoplayMatches = 0
 
     #if DEBUG
@@ -73,7 +77,9 @@ struct RootView: View {
                     case "splash": break
                     case "toss": go(.toss(MatchRequest(mode: .vsAI(.medium))))
                     case "online": go(.online)
-                    default: go(Self.autoplay ? .toss(MatchRequest(mode: .vsAI(.medium))) : .home)
+                    default:
+                        if push.pendingMatchId != nil { go(.online); break }
+                        go(Self.autoplay ? .toss(MatchRequest(mode: .vsAI(.medium))) : .home)
                     }
                 }
             case .home:
@@ -108,6 +114,15 @@ struct RootView: View {
             }
         }
         .foregroundStyle(Color.ink)
+        // "Your friend joined": open the lobby, which sits you back down. Not
+        // mid-match, and not during the splash (it routes on when done).
+        .onChange(of: push.pendingMatchId) { _, id in
+            guard id != nil else { return }
+            switch route {
+            case .home, .result: go(.online)
+            default: break
+            }
+        }
         #if DEBUG
         .task {
             if let path = UserDefaults.standard.string(forKey: "renderIcon") { IconArt.write(to: path) }

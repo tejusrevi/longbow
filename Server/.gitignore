@@ -1,2 +1,4 @@
 .env
 node_modules/
+*.p8
+deploy/apns/

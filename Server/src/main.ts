@@ -34,6 +34,11 @@ function InitModule(ctx: any, logger: any, nk: any, initializer: any): void {
   initializer.registerRpc("create_duel", rpcCreateDuel);
   initializer.registerRpc("join_duel", rpcJoinDuel);
   initializer.registerRpc("duel_history", rpcDuelHistory);
+  initializer.registerRpc("get_profile", rpcGetProfile);
+  initializer.registerRpc("set_profile", rpcSetProfile);
+  initializer.registerRpc("delete_account", rpcDeleteAccount);
+  initializer.registerRpc("register_push", rpcRegisterPush);
+  initializer.registerMatchmakerMatched(quickMatchMatched);
   initializer.registerMatch(DUEL_MODULE, {
     matchInit: duelInit, matchJoinAttempt: duelJoinAttempt, matchJoin: duelJoin, matchLeave: duelLeave,
     matchLoop: duelLoop, matchTerminate: duelTerminate, matchSignal: duelSignal,

@@ -337,7 +337,7 @@ function simulateShot(angleTenthsRaw, powerPermilleRaw, shooter, c) {
 // A6.5), plus ShotSearch.isHittable and RoundConditions.generatePlayable that
 // it relies on. Shared/golden_matches.json proves it plays out exactly like
 // the app, turn by turn.
-var RULES = { roundsToWin: 3, maxShotsPerPlayerPerRound: 20, startHealth: 100, shotTimeLimitSeconds: 20 };
+var RULES = { roundsToWin: 1, maxShotsPerPlayerPerRound: 20, startHealth: 100, shotTimeLimitSeconds: 20 };
 var DAMAGE = { head: 50, body: 25, legs: 15 };
 var NEAR_MISS_DISTANCE = 3;
 var CHALLENGES = {
@@ -657,6 +657,106 @@ var MatchEngine = /** @class */ (function () {
     };
     return MatchEngine;
 }());
+// Player identity (spec A7.1): gamertag, country, and deleting the account.
+// The gamertag is the Nakama username, stored lowercase so "Tej" and "tej"
+// can't both exist; display_name keeps the player's own casing. Country is
+// an ISO 3166 alpha-2 code in the account's location field.
+var GAMERTAG_PATTERN = /^[A-Za-z0-9_]{3,16}$/;
+// A short list of words no gamertag may contain. Not exhaustive: it stops the
+// obvious, and the console can rename anything that slips through.
+var BLOCKED_WORDS = ["fuck", "shit", "cunt", "nigg", "fag", "rape", "nazi", "hitler", "slut", "whore", "porn", "dick", "cock", "pussy", "bitch"];
+function gamertagProblem(tag) {
+    if (!GAMERTAG_PATTERN.test(tag))
+        return "invalid";
+    var plain = tag.toLowerCase().replace(/_/g, "").replace(/0/g, "o").replace(/1/g, "i").replace(/3/g, "e").replace(/4/g, "a").replace(/5/g, "s");
+    for (var i = 0; i < BLOCKED_WORDS.length; i++)
+        if (plain.indexOf(BLOCKED_WORDS[i]) >= 0)
+            return "not_allowed";
+    return null;
+}
+/// The profile as other players see it. A gamertag counts only once the
+/// player picked one (Nakama makes up a random username on sign-up).
+function profileOf(nk, userId) {
+    var account = nk.accountGetId(userId);
+    var user = account.user || {};
+    var meta = user.metadata || {};
+    return { gamertag: meta.gamertagSet ? (user.displayName || user.username) : null, country: user.location || null };
+}
+function rpcGetProfile(ctx, logger, nk, payload) {
+    return JSON.stringify(profileOf(nk, ctx.userId));
+}
+function rpcSetProfile(ctx, logger, nk, payload) {
+    var req = JSON.parse(payload || "{}");
+    var tag = String(req.gamertag || "").trim();
+    var country = String(req.country || "").toUpperCase();
+    var problem = gamertagProblem(tag);
+    if (problem)
+        return JSON.stringify({ error: problem });
+    if (!/^[A-Z]{2}$/.test(country))
+        return JSON.stringify({ error: "bad_country" });
+    var current = nk.accountGetId(ctx.userId).user || {};
+    var meta = current.metadata || {};
+    meta.gamertagSet = true;
+    try {
+        // Arguments: userId, username, displayName, timezone, location, langTag, avatarUrl, metadata.
+        nk.accountUpdateId(ctx.userId, tag.toLowerCase(), tag, null, country, null, null, meta);
+    }
+    catch (err) {
+        var msg = String(err && (err.message || err));
+        if (/username/i.test(msg) && /(use|exists|taken|unique)/i.test(msg))
+            return JSON.stringify({ error: "taken" });
+        logger.error("set_profile failed: %s", msg);
+        throw err;
+    }
+    return JSON.stringify({ gamertag: tag, country: country });
+}
+/// Deletes the player's account and everything stored under it. The app
+/// then forgets its device id, so the next launch starts a fresh account.
+function rpcDeleteAccount(ctx, logger, nk, payload) {
+    if (!ctx.userId)
+        throw new Error("not signed in");
+    nk.accountDeleteId(ctx.userId, false);
+    logger.info("account %s deleted at the player's request", ctx.userId);
+    return JSON.stringify({ deleted: true });
+}
+// Push notifications (A7.4). The app registers its APNs device token; the
+// server posts alerts to the pusher sidecar (Server/deploy/pusher), which
+// signs and sends them to Apple. Without PUSH_URL (local dev) it's a no-op.
+var PUSH_COLLECTION = "push";
+function rpcRegisterPush(ctx, logger, nk, payload) {
+    var req = JSON.parse(payload || "{}");
+    var token = String(req.token || "");
+    if (!/^[0-9a-f]{64,200}$/i.test(token))
+        return JSON.stringify({ error: "bad_token" });
+    nk.storageWrite([{ collection: PUSH_COLLECTION, key: "device", userId: ctx.userId,
+            value: { token: token, sandbox: !!req.sandbox }, permissionRead: 0, permissionWrite: 0 }]);
+    return JSON.stringify({ ok: true });
+}
+/// Sends an alert to a player's phone, if they allowed notifications.
+/// A token Apple says is dead is forgotten.
+function notifyPlayer(ctx, logger, nk, userId, title, body, data) {
+    var env = ctx.env || {};
+    if (!env.PUSH_URL)
+        return;
+    var found = nk.storageRead([{ collection: PUSH_COLLECTION, key: "device", userId: userId }]);
+    if (found.length === 0)
+        return;
+    var device = found[0].value;
+    try {
+        var res = nk.httpRequest(env.PUSH_URL, "post", { "Content-Type": "application/json", "X-Push-Secret": env.PUSH_SECRET }, JSON.stringify({ deviceToken: device.token, sandbox: device.sandbox, title: title, body: body, data: data,
+            collapseId: data && data.matchId }), 5000);
+        var out = JSON.parse(res.body || "{}");
+        if (out.status === 410 || out.reason === "BadDeviceToken" || out.reason === "Unregistered") {
+            nk.storageDelete([{ collection: PUSH_COLLECTION, key: "device", userId: userId }]);
+        }
+        else if (out.status !== 200) {
+            logger.warn("push to %s failed: %s %s", userId, out.status, out.reason);
+        }
+    }
+    catch (err) {
+        logger.warn("push to %s failed: %s", userId, String(err));
+    }
+}
 // Friend duels (spec A7.2, A8): a 4-character code, two seats, the server
 // holds the one true MatchEngine. Clients send only their inputs; the server
 // simulates, then sends every result to both players.
@@ -728,6 +828,16 @@ function rpcJoinDuel(ctx, logger, nk, payload) {
         return JSON.stringify({ error: "full" });
     return JSON.stringify({ matchId: found[0].value.matchId });
 }
+/// Quick match: the matchmaker paired two strangers. Their duel is like a
+/// friend duel without a code, at medium difficulty, open only to the pair.
+function quickMatchMatched(ctx, logger, nk, matches) {
+    var ids = [];
+    for (var i = 0; i < matches.length; i++)
+        ids.push(matches[i].presence.userId);
+    var matchId = nk.matchCreate(DUEL_MODULE, { code: "QUICK", challenge: "medium", createdBy: ids[0], invited: ids.join(",") });
+    logger.info("quick match for %s", ids.join(" vs "));
+    return matchId;
+}
 // --- Match handler ----------------------------------------------------------
 function label(s) {
     var players = [];
@@ -740,7 +850,8 @@ function label(s) {
 }
 function duelInit(ctx, logger, nk, params) {
     var s = { code: params.code, challenge: params.challenge || "medium", seats: [null, null], engine: null,
-        seedHex: "", deadlineTick: 0, tick: 0, endedTick: -1, createdBy: params.createdBy || "" };
+        seedHex: "", deadlineTick: 0, tick: 0, endedTick: -1, createdBy: params.createdBy || "",
+        invited: params.invited ? String(params.invited).split(",") : null };
     return { state: s, tickRate: TICK_RATE, label: label(s) };
 }
 function duelJoinAttempt(ctx, logger, nk, dispatcher, tick, s, presence, metadata) {
@@ -748,11 +859,23 @@ function duelJoinAttempt(ctx, logger, nk, dispatcher, tick, s, presence, metadat
         return { state: s, accept: true };
     if (s.engine !== null || (s.seats[0] && s.seats[1]))
         return { state: s, accept: false, rejectMessage: "full" };
+    if (s.invited && s.invited.indexOf(presence.userId) < 0)
+        return { state: s, accept: false, rejectMessage: "full" };
     // The creator always takes the left seat.
     var seat = s.seats[0] ? 1 : 0;
     if (presence.userId !== s.createdBy && !s.seats[1] && seat === 0)
         seat = 1;
-    s.seats[seat] = { userId: presence.userId, sessionId: presence.sessionId, name: String((metadata && metadata.name) || "PLAYER").slice(0, 16),
+    // Name and country come from the account, not from what the app says.
+    var profile = profileOf(nk, presence.userId);
+    // A friend arrived with the code: the creator may have stepped away to send
+    // it (Messages, say). Ping their phone so they come back and play.
+    if (!s.invited && s.createdBy && presence.userId !== s.createdBy) {
+        var name = profile.gamertag || "Your friend";
+        notifyPlayer(ctx, logger, nk, s.createdBy, name + " joined your duel", "Tap to play.", { matchId: ctx.matchId, code: s.code });
+    }
+    s.seats[seat] = { userId: presence.userId, sessionId: presence.sessionId,
+        name: profile.gamertag || String((metadata && metadata.name) || "PLAYER").slice(0, 16),
+        country: profile.country || "",
         avatar: metadata && metadata.avatar ? JSON.parse(metadata.avatar) : null, hat: (metadata && metadata.hat) || "none",
         present: false, awaySince: 0 };
     return { state: s, accept: true };
@@ -765,7 +888,7 @@ function startMessage(s) {
     return {
         seed: s.seedHex, arena: e.state.arena, roundsToWin: e.state.roundsToWin, challenge: s.challenge,
         firstShooter: tossWinner(u64FromHex(s.seedHex)), turn: e.state.turn,
-        seats: s.seats.map(function (st) { return st ? { userId: st.userId, name: st.name, avatar: st.avatar, hat: st.hat } : null; }),
+        seats: s.seats.map(function (st) { return st ? { userId: st.userId, name: st.name, country: st.country, avatar: st.avatar, hat: st.hat } : null; }),
         history: s.history || [],
     };
 }
@@ -804,8 +927,10 @@ function duelLeave(ctx, logger, nk, dispatcher, tick, s, presences) {
             continue;
         st.present = false;
         st.awaySince = tick;
-        if (s.engine === null)
-            s.seats[seat] = null; // left the waiting room
+        // Left the waiting room. The creator keeps their seat (they may have gone
+        // to send the code, and the push brings them back); anyone else frees it.
+        if (s.engine === null && st.userId !== s.createdBy)
+            s.seats[seat] = null;
         else if (s.endedTick < 0)
             broadcast(dispatcher, OP.OPPONENT_AWAY, { seat: seat, graceSeconds: AWAY_GRACE_S });
     }
@@ -947,6 +1072,11 @@ function InitModule(ctx, logger, nk, initializer) {
     initializer.registerRpc("create_duel", rpcCreateDuel);
     initializer.registerRpc("join_duel", rpcJoinDuel);
     initializer.registerRpc("duel_history", rpcDuelHistory);
+    initializer.registerRpc("get_profile", rpcGetProfile);
+    initializer.registerRpc("set_profile", rpcSetProfile);
+    initializer.registerRpc("delete_account", rpcDeleteAccount);
+    initializer.registerRpc("register_push", rpcRegisterPush);
+    initializer.registerMatchmakerMatched(quickMatchMatched);
     initializer.registerMatch(DUEL_MODULE, {
         matchInit: duelInit, matchJoinAttempt: duelJoinAttempt, matchJoin: duelJoin, matchLeave: duelLeave,
         matchLoop: duelLoop, matchTerminate: duelTerminate, matchSignal: duelSignal,

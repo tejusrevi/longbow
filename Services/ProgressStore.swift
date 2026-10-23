@@ -156,6 +156,15 @@ final class ProgressStore: ObservableObject {
 
     // MARK: Persistence
 
+    /// Back to a brand-new player (the account was deleted).
+    func resetAll() {
+        for key in ["totalXP", "lifetimeStats", "equippedHat", "avatar"] { defaults.removeObject(forKey: key) }
+        totalXP = 0
+        stats = LifetimeStats()
+        equippedHat = .none
+        avatar = .bjorn
+    }
+
     private func save<T: Encodable>(_ value: T, _ key: String) {
         if let data = try? JSONEncoder().encode(value) { defaults.set(data, forKey: key) }
     }

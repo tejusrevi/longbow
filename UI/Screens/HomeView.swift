@@ -124,7 +124,7 @@ private struct ProfileChip: View {
                 VStack(alignment: .trailing, spacing: 5) {
                     HStack(spacing: 8) {
                         if progress.stats.winStreak >= 2 {
-                            Text("\(progress.stats.winStreak) in a row").font(Theme.hand(14))
+                            Text("\(progress.stats.winStreak) in a row").font(Theme.mono(11))
                         }
                         Text("LVL \(info.level)").font(Theme.display(16))
                     }
@@ -153,7 +153,7 @@ private struct ProfileChip: View {
                         .rotationEffect(.degrees(-35))
                         .padding(.trailing, 22)
                     Text("that's you!\ntap to dress up")
-                        .font(Theme.hand(16))
+                        .font(Theme.mono(13))
                         .multilineTextAlignment(.trailing)
                 }
                 .rotationEffect(.degrees(-3))
@@ -222,7 +222,6 @@ struct DifficultySheet: View {
                                     Text(line).font(Theme.mono(12)).fixedSize(horizontal: false, vertical: true)
                                 }
                                 Spacer(minLength: 0)
-                                Text("first to \(services.config.game.rules.roundsToWin)").font(Theme.hand(15)).opacity(0.8)
                             }
                             .foregroundStyle(primary ? Color.paper : Color.ink)
                             .padding(16)

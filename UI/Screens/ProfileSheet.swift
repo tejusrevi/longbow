@@ -11,6 +11,9 @@ struct ProfileSheet: View {
     @EnvironmentObject private var progress: ProgressStore
     @Environment(\.services) private var services
     @State private var editingFace = false
+    @State private var editingTag = false
+    @State private var confirmDelete = false
+    @State private var deleteProblem: String?
 
     var body: some View {
         ZStack {
@@ -31,15 +34,53 @@ struct ProfileSheet: View {
                     }
                 }
                 Spacer(minLength: 0)
+                accountRow
             }
             .padding(.horizontal, 16)
             .padding(.top, 6)
+            .padding(.bottom, 8)
+            if confirmDelete {
+                InkAlert(title: "DELETE ACCOUNT?",
+                         message: "Your gamertag, level, records and hats are gone for good. This can't be undone.",
+                         primary: "KEEP IT", secondary: "DELETE",
+                         onPrimary: { confirmDelete = false },
+                         onSecondary: deleteAccount)
+            }
         }
         // Full screen, so it always lays out inside the safe area.
         .fullScreenCover(isPresented: $editingFace) {
             AvatarEditor { editingFace = false }
                 .environmentObject(progress)
                 .environment(\.services, services)
+        }
+        .fullScreenCover(isPresented: $editingTag) {
+            GamertagSheet(onDone: { editingTag = false }, onCancel: { editingTag = false }, account: services.account)
+                .environment(\.services, services)
+        }
+    }
+
+    // MARK: Account
+
+    private var accountRow: some View {
+        AccountRow(account: services.account, problem: deleteProblem,
+                   onChange: { editingTag = true },
+                   onDelete: {
+                       services.haptics.selection()
+                       confirmDelete = true
+                   })
+    }
+
+    private func deleteAccount() {
+        confirmDelete = false
+        Task {
+            do {
+                try await services.account.deleteAccount(progress: progress)
+                services.haptics.success()
+                services.analytics.log("account_deleted", [:])
+                onClose()
+            } catch {
+                deleteProblem = "Couldn't reach the server, so nothing was deleted. Try again?"
+            }
         }
     }
 
@@ -229,5 +270,27 @@ private struct PerchingChicken: View {
         withAnimation(.easeOut(duration: 0.15)) { hop = 10 }
         withAnimation(.easeIn(duration: 0.18).delay(0.15)) { hop = 0 }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { pose = .stand }
+    }
+}
+
+/// Bottom line of the profile: who you are online, and the way out.
+private struct AccountRow: View {
+    @ObservedObject var account: AccountStore
+    let problem: String?
+    let onChange: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("GAMERTAG").font(Theme.mono(12, bold: true)).tracking(2)
+            Text(account.gamertag ?? "not picked yet").font(Theme.mono(14)).lineLimit(1)
+            if let c = account.country { Text(c).font(Theme.mono(12, bold: true)).opacity(0.7) }
+            Button(account.hasGamertag ? "change" : "pick one", action: onChange)
+                .font(Theme.mono(13)).underline().buttonStyle(.plain)
+            Spacer()
+            if let problem { Text(problem).font(Theme.mono(12)).lineLimit(2) }
+            Button("delete account", action: onDelete)
+                .font(Theme.mono(12)).underline().opacity(0.7).buttonStyle(.plain)
+        }
     }
 }

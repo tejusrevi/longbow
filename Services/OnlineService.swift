@@ -55,26 +55,61 @@ final class NakamaClient {
     // MARK: Sign-in
 
     /// Signs in with this device's account (created on first use).
+    /// With Game Center: the account already tied to this Game Center player
+    /// (another phone, an iPad), or else this device's account with Game
+    /// Center attached so it follows the player from now on.
     func session() async throws -> String {
         if let token, tokenExpiry > Date().addingTimeInterval(60) { return token }
-        var req = URLRequest(url: base.appendingPathComponent("v2/account/authenticate/device")
-            .appending(queryItems: [URLQueryItem(name: "create", value: "true")]))
+        if let gc = await GameCenterAuth.shared.identity() {
+            if let t = try? await authenticate("v2/account/authenticate/gamecenter", body: gc.json, create: false) {
+                return adopt(t)
+            }
+            let t = adopt(try await authenticate("v2/account/authenticate/device", body: ["id": DeviceIdentity.id], create: true))
+            if let fresh = await GameCenterAuth.shared.identity() {
+                var req = URLRequest(url: base.appendingPathComponent("v2/account/link/gamecenter"))
+                req.httpMethod = "POST"
+                req.timeoutInterval = 8
+                req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.httpBody = try? JSONSerialization.data(withJSONObject: fresh.json)
+                let code = ((try? await URLSession.shared.data(for: req))?.1 as? HTTPURLResponse)?.statusCode
+                log.notice("game center link: \(code ?? -1, privacy: .public)")
+            }
+            return t
+        }
+        return adopt(try await authenticate("v2/account/authenticate/device", body: ["id": DeviceIdentity.id], create: true))
+    }
+
+    private func authenticate(_ path: String, body: [String: Any], create: Bool) async throws -> String {
+        var req = URLRequest(url: base.appendingPathComponent(path)
+            .appending(queryItems: [URLQueryItem(name: "create", value: create ? "true" : "false")]))
         req.httpMethod = "POST"
         req.timeoutInterval = 8
         req.setValue("Basic " + Data("\(serverKey):".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["id": DeviceIdentity.id])
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await URLSession.shared.data(for: req)
         guard (response as? HTTPURLResponse)?.statusCode == 200,
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let t = json["token"] as? String else {
             throw ServerError(message: "Couldn't sign in to the server.")
         }
+        return t
+    }
+
+    private func adopt(_ t: String) -> String {
         token = t
         let claims = Self.claims(t)
         userId = claims["uid"] as? String
         tokenExpiry = Date(timeIntervalSince1970: claims["exp"] as? Double ?? 0)
         return t
+    }
+
+    /// Forgets the session (after the account was deleted).
+    func signOut() {
+        token = nil
+        tokenExpiry = .distantPast
+        userId = nil
     }
 
     private static func claims(_ jwt: String) -> [String: Any] {
@@ -135,6 +170,8 @@ final class RealtimeSocket {
     private var waiting: [String: CheckedContinuation<[String: Any], Error>] = [:]
     /// (opCode, JSON body) for every match message from the server.
     var onMatchData: ((Int, [String: Any]) -> Void)?
+    /// Quick match found an opponent: the match id to join.
+    var onMatchmakerMatched: ((String) -> Void)?
     var onClose: (() -> Void)?
     private var closed = false
 
@@ -175,6 +212,10 @@ final class RealtimeSocket {
             } else {
                 cont.resume(returning: env)
             }
+            return
+        }
+        if let mm = env["matchmaker_matched"] as? [String: Any] {
+            if let id = mm["match_id"] as? String { onMatchmakerMatched?(id) }
             return
         }
         guard let md = env["match_data"] as? [String: Any],
@@ -227,8 +268,23 @@ final class RealtimeSocket {
 /// This device's account id, kept in the Keychain so it survives reinstalls.
 enum DeviceIdentity {
     private static let service = "com.tejusrevi.longbow.device"
+    private static var cached: String?
 
-    static let id: String = {
+    static var id: String {
+        if let cached { return cached }
+        let made = loadOrCreate()
+        cached = made
+        return made
+    }
+
+    /// After the account is deleted: the next sign-in makes a new one.
+    static func reset() {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service]
+        SecItemDelete(query as CFDictionary)
+        cached = nil
+    }
+
+    private static func loadOrCreate() -> String {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                     kSecReturnData as String: true]
         var out: AnyObject?
@@ -244,7 +300,7 @@ enum DeviceIdentity {
                                   kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
         SecItemAdd(add as CFDictionary, nil)
         return new
-    }()
+    }
 }
 
 // MARK: - Friend duel
@@ -260,6 +316,8 @@ struct DuelStart: Equatable {
     struct Player: Equatable {
         let userId: String
         let name: String
+        /// Two-letter country code ("" if they never picked one).
+        let country: String
         let avatar: Avatar
         let hat: Hat
     }
@@ -289,7 +347,7 @@ struct DuelResult: Equatable {
 @MainActor
 final class FriendDuel: ObservableObject, Identifiable {
     enum Stage: Equatable {
-        case idle, connecting, waiting(code: String), started(DuelStart), failed(String)
+        case idle, connecting, searching, waiting(code: String), started(DuelStart), failed(String)
     }
 
     let id = UUID()
@@ -342,27 +400,103 @@ final class FriendDuel: ObservableObject, Identifiable {
         Task {
             do {
                 let (id, code) = try await find(client)
-                let socket = try await client.openSocket()
-                self.socket = socket
-                self.matchId = id
-                socket.onMatchData = { [weak self] op, body in self?.handle(op, body) }
-                socket.onClose = { [weak self] in
-                    guard let self else { return }
-                    if case .started = self.stage { self.onEnd?(-1, "disconnected") } else {
-                        self.stage = .failed("Lost the connection to the server.")
-                    }
-                }
-                let avatar = String(data: (try? JSONEncoder().encode(me.avatar)) ?? Data(), encoding: .utf8) ?? "{}"
-                let reply = try await socket.request(["match_join": [
-                    "match_id": id, "metadata": ["name": me.name, "avatar": avatar, "hat": me.hat.rawValue],
-                ]])
-                if reply["error"] != nil { throw NakamaClient.ServerError(message: "Couldn't join that duel.") }
+                let socket = try await connect()
+                try await joinMatch(id, me: me, on: socket)
                 if case .started = stage { return }
                 stage = .waiting(code: code ?? "")
             } catch {
                 stage = .failed((error as? LocalizedError)?.errorDescription ?? "Couldn't reach the server.")
             }
         }
+    }
+
+    /// Quick match (A7.3): ask the matchmaker for anyone else who's looking.
+    /// When it pairs us, the server has already made the duel; we just join.
+    func quickMatch(me: Me) {
+        stage = .connecting
+        Task {
+            do {
+                let socket = try await connect()
+                socket.onMatchmakerMatched = { [weak self] id in
+                    guard let self else { return }
+                    Task {
+                        do { try await self.joinMatch(id, me: me, on: socket) } catch {
+                            self.stage = .failed("Lost the opponent. Try again?")
+                        }
+                    }
+                }
+                _ = try await socket.request(["matchmaker_add": [
+                    "min_count": 2, "max_count": 2, "query": "+properties.mode:quick",
+                    "string_properties": ["mode": "quick"],
+                ]])
+                if case .connecting = stage { stage = .searching }
+            } catch {
+                stage = .failed((error as? LocalizedError)?.errorDescription ?? "Couldn't reach the server.")
+            }
+        }
+    }
+
+    /// Stops looking for a quick match. Closing the socket also drops the
+    /// matchmaker ticket on the server.
+    func cancelSearch() {
+        stage = .idle
+        close()
+    }
+
+    private func connect() async throws -> RealtimeSocket {
+        let socket = try await client.openSocket()
+        self.socket = socket
+        socket.onMatchData = { [weak self] op, body in self?.handle(op, body) }
+        socket.onClose = { [weak self] in
+            guard let self, self.socket === socket else { return }
+            self.socket = nil
+            switch self.stage {
+            case .started: self.onEnd?(-1, "disconnected")
+            // iOS drops the socket while you're off sending the code. The
+            // server keeps your seat; `resume` sits you back down.
+            case .waiting: break
+            case .idle: break
+            default: self.stage = .failed("Lost the connection to the server.")
+            }
+        }
+        return socket
+    }
+
+    /// Back in the app while waiting for a friend: reconnect to the same duel.
+    func resume(me: Me) {
+        guard case .waiting = stage, socket == nil, let id = matchId else { return }
+        Task {
+            do {
+                let socket = try await connect()
+                try await joinMatch(id, me: me, on: socket)
+            } catch {
+                stage = .failed("Lost the connection to the server.")
+            }
+        }
+    }
+
+    /// Opened from "your friend joined" (a push): sit back down in that duel.
+    func rejoin(matchId id: String, code: String, me: Me) {
+        stage = .connecting
+        Task {
+            do {
+                let socket = try await connect()
+                try await joinMatch(id, me: me, on: socket)
+                if case .started = stage { return }
+                stage = .waiting(code: code)
+            } catch {
+                stage = .failed("That duel has ended.")
+            }
+        }
+    }
+
+    private func joinMatch(_ id: String, me: Me, on socket: RealtimeSocket) async throws {
+        matchId = id
+        let avatar = String(data: (try? JSONEncoder().encode(me.avatar)) ?? Data(), encoding: .utf8) ?? "{}"
+        let reply = try await socket.request(["match_join": [
+            "match_id": id, "metadata": ["name": me.name, "avatar": avatar, "hat": me.hat.rawValue],
+        ]])
+        if reply["error"] != nil { throw NakamaClient.ServerError(message: "Couldn't join that duel.") }
     }
 
     private func handle(_ op: Int, _ body: [String: Any]) {
@@ -408,10 +542,11 @@ final class FriendDuel: ObservableObject, Identifiable {
             var avatar = Avatar.bjorn
             if let a = s["avatar"], let data = try? JSONSerialization.data(withJSONObject: a),
                let decoded = try? JSONDecoder().decode(Avatar.self, from: data) { avatar = decoded }
-            players.append(.init(userId: uid, name: (s["name"] as? String ?? "ARCHER").uppercased(), avatar: avatar,
+            players.append(.init(userId: uid, name: (s["name"] as? String ?? "ARCHER").uppercased(),
+                                 country: s["country"] as? String ?? "", avatar: avatar,
                                  hat: Hat(rawValue: s["hat"] as? String ?? "") ?? .none))
         }
-        return DuelStart(seedHex: seed, roundsToWin: b["roundsToWin"] as? Int ?? 3,
+        return DuelStart(seedHex: seed, roundsToWin: b["roundsToWin"] as? Int ?? 1,
                          challenge: HitChallenge(rawValue: b["challenge"] as? String ?? "") ?? .medium,
                          firstShooter: b["firstShooter"] as? Int ?? 0, players: players, seat: mine)
     }

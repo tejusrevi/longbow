@@ -26,6 +26,13 @@ targets:
         excludes: ["Fonts/README.md", "Fonts/*.txt", "Music/README.md"]
     dependencies:
       - package: LongbowCore
+      - sdk: GameKit.framework
+    entitlements:
+      path: LongbowApp/Longbow.entitlements
+      properties:
+        com.apple.developer.game-center: true
+        # Xcode signs App Store / TestFlight builds as "production" itself.
+        aps-environment: development
     info:
       path: LongbowApp/Info.plist
       properties:

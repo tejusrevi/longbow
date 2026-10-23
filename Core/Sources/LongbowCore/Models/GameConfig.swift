@@ -51,8 +51,8 @@ public struct DamageConfig: Codable, Equatable, Sendable {
 }
 
 public struct RulesConfig: Codable, Equatable, Sendable {
-    public var roundsToWin: Int = 3
-    public var roundsToWinEasyAI: Int = 2
+    public var roundsToWin: Int = 1
+    public var roundsToWinEasyAI: Int = 1
     public var maxShotsPerPlayerPerRound: Int = 20
     public var shotTimeLimitSeconds: Double = 20
 

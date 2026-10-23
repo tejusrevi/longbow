@@ -59,6 +59,8 @@ struct MatchSummary: Identifiable, Equatable {
     var hats: [Hat] = [.none, .none]
     /// Set when the opponent left an online match early.
     var opponentLeft = false
+    /// Health each archer finished on (the winner's is the headline).
+    var health: [Int] = [0, 0]
 
     var won: Bool { winner == me }
 }
@@ -122,6 +124,8 @@ final class MatchController: ObservableObject {
     }
 
     let names: [String]
+    /// Online players' two-letter countries, shown beside their names ("" offline).
+    let countries: [String]
     let mode: MatchMode
     let difficulty: AIDifficulty
     /// Players controlled by touch.
@@ -168,6 +172,7 @@ final class MatchController: ObservableObject {
         let difficulty = mode.difficulty ?? .medium
         self.difficulty = difficulty
         var names = mode == .passAndPlay ? ["PLAYER 1", "PLAYER 2"] : ["YOU", "GUS"]
+        var countries = ["", ""]
         var avatars: [Avatar] = [services.progress.avatar, .gus]
         var hats: [Hat] = [services.progress.equippedHat, mode == .passAndPlay ? .featherCap : .none]
         if case let .online(o) = mode {
@@ -175,6 +180,7 @@ final class MatchController: ObservableObject {
             me = o.start.seat
             names = o.start.players.map(\.name)
             names[o.start.seat] = "YOU"
+            countries = o.start.players.map(\.country)
             avatars = o.start.players.map(\.avatar)
             hats = o.start.players.map(\.hat)
         } else {
@@ -191,6 +197,7 @@ final class MatchController: ObservableObject {
         }
         #endif
         self.names = names
+        self.countries = countries
         stats = MatchStats(won: false, difficulty: difficulty)
         self.services = services
         let config = services.config
@@ -685,7 +692,7 @@ final class MatchController: ObservableObject {
             mode: mode, names: names, winner: winner, score: engine.state.roundsWon,
             arrowsLanded: engine.state.hitsLanded[winner], headshots: engine.state.headshots[me],
             xpBefore: before, rewards: rewards, forfeited: forfeited, me: me, avatars: avatars, hats: hats,
-            opponentLeft: opponentLeft
+            opponentLeft: opponentLeft, health: engine.state.health
         ))
         online?.duel.close()
     }

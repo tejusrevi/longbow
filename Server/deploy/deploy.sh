@@ -10,12 +10,14 @@ here=$(cd "$(dirname "$0")" && pwd)
 ssh="ssh -i $KEY -o StrictHostKeyChecking=accept-new longbow@$HOST"
 
 [ -f "$here/.env" ] || { echo "missing $here/.env" >&2; exit 1; }
-$ssh 'mkdir -p ~/longbow/modules'
+$ssh 'mkdir -p ~/longbow/modules ~/longbow/pusher ~/longbow/apns && chmod 700 ~/longbow/apns && rm -f ~/longbow/apns/*.p8'
+scp -q -i "$KEY" "$here/pusher/server.mjs" "longbow@$HOST:longbow/pusher/"
+scp -q -i "$KEY" "$here"/apns/*.p8 "longbow@$HOST:longbow/apns/"
 scp -q -i "$KEY" "$here/docker-compose.prod.yml" "$here/Caddyfile" "$here/backup.sh" "$here/.env" "longbow@$HOST:longbow/"
 scp -q -i "$KEY" "$here/../modules/index.js" "longbow@$HOST:longbow/modules/"
 $ssh 'set -e
 cd ~/longbow
-chmod 600 .env; chmod +x backup.sh
+chmod 600 .env apns/*.p8; chmod +x backup.sh
 docker compose -f docker-compose.prod.yml pull -q
 docker compose -f docker-compose.prod.yml up -d --remove-orphans
 docker compose -f docker-compose.prod.yml restart nakama >/dev/null

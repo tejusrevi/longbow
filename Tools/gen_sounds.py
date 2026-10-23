@@ -118,22 +118,13 @@ def saw(p):
 
 # --- Sounds -----------------------------------------------------------------
 
-def creak(level):
-    """Short wooden bowstring creak; pitch rises with draw power."""
-    base = 140 + level * 45
-    total = n(0.11)
-    r = random.Random(level)
-    out, phase = [], 0.0
-    for i in range(total):
-        t = i / SR
-        # Stick-slip: a buzzy saw with jittered pitch.
-        f = base * (1 + 0.04 * math.sin(TAU * 31 * t)) * (1 + r.uniform(-0.02, 0.02))
-        phase += TAU * f / SR
-        out.append(saw(phase) * env_ad(i, total, 0.004, 1.5))
-    out = bandpass(out, 300, 2600)
-    grit = bandpass(gain(noise(total, 10 + level), 0.4), 1500, 5000)
-    grit = [g * env_ad(i, total, 0.002, 3) for i, g in enumerate(grit)]
-    return mix(out, grit)
+def ratchet(level):
+    """One click of the bow being cranked back; pitch climbs with draw power."""
+    f = 900 + 1400 * (level - 1) / 5
+    body = tone(f, 0.03, math.sin, lambda i, T: 0.7 * env_ad(i, T, 0.0005, 5))
+    knock = lowpass(noise(n(0.015), 100 + level), 3000)
+    knock = [x * env_ad(i, len(knock), 0.0003, 4) * 0.5 for i, x in enumerate(knock)]
+    return mix(body, knock)
 
 
 def twang(f0=392, sec=0.35, seed=52):
@@ -377,7 +368,7 @@ def click_tone(f):
 
 def main():
     for k in range(1, 7):
-        write(f"creak_{k}", creak(k), 0.6)
+        write(f"ratchet_{k}", ratchet(k), 0.6)
     write("twang", twang())
     write("twang_2", twang(f0=370, sec=0.37, seed=13))
     write("twang_3", twang(f0=415, sec=0.33, seed=23))

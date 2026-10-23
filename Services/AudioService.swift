@@ -4,8 +4,8 @@ import UIKit
 
 /// Sound effects and music (spec A15).
 enum SoundEffect: String, CaseIterable {
-    case creak1 = "creak_1", creak2 = "creak_2", creak3 = "creak_3"
-    case creak4 = "creak_4", creak5 = "creak_5", creak6 = "creak_6"
+    case ratchet1 = "ratchet_1", ratchet2 = "ratchet_2", ratchet3 = "ratchet_3"
+    case ratchet4 = "ratchet_4", ratchet5 = "ratchet_5", ratchet6 = "ratchet_6"
     case twang, whoosh
     case thunkDirt = "thunk_dirt", thunkWood = "thunk_wood"
     case thwack, grunt, bonk, clang
@@ -35,9 +35,9 @@ enum SoundEffect: String, CaseIterable {
         }
     }
 
-    /// Bowstring creak for a draw power 0...1 (pitch rises with power).
-    static func creak(power: Double) -> SoundEffect {
-        let all: [SoundEffect] = [.creak1, .creak2, .creak3, .creak4, .creak5, .creak6]
+    /// Ratchet click for a draw power 0...1 (pitch rises with power).
+    static func ratchet(power: Double) -> SoundEffect {
+        let all: [SoundEffect] = [.ratchet1, .ratchet2, .ratchet3, .ratchet4, .ratchet5, .ratchet6]
         return all[min(all.count - 1, max(0, Int(power * Double(all.count))))]
     }
 }
